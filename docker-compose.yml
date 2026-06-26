@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  dam-web:
+    build: .
+    ports:
+      - "${WEB_PORT:-5500}:5500"
+    env_file:
+      - .env
+    volumes:
+      - "${DB_DATA_PATH:-./data}:/dam_data"
+      - "${PROJECTS_ROOT:-./projects}:/projects:ro"
+      - "${AWS_CREDENTIALS_PATH:-${HOME}/.aws}:/root/.aws:ro"
+      - "${SSH_PATH:-${HOME}/.ssh}:/root/.ssh:ro"
+    environment:
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - GIT_SSH_COMMAND=${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=no}
+      - GH_ORG=${GH_ORG:-user}
+      - DVC_REPO_URL_TEMPLATE=${DVC_REPO_URL_TEMPLATE:-https://github.com/{org}/{project}.git}
+      - PROJECTS_ROOT=/projects
+      - DB_PATH=/dam_data/assets.db
+      - THUMBNAIL_DIR=/dam_data/thumbnails

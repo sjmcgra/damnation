@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment files
+.env
+
+# Database and caches
+*.db
+*.sqlite3
+*.log
+last_search.json
+
+# OS
+.DS_Store
+
+# Local data
+data/

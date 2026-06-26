@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ asset.filename }} - DAM</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        
+        header {
+            background: #2d2d2d;
+            padding: 20px;
+            border-bottom: 2px solid #404040;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        h1 { 
+            color: #fff;
+            font-size: 24px;
+        }
+        
+        .back-link {
+            color: #0066cc;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        
+        .back-link:hover {
+            color: #0052a3;
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            padding: 30px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .preview {
+            background: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #404040;
+        }
+        
+        .preview-image {
+            width: 100%;
+            height: 400px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        
+        .preview-image img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        
+        .preview-info {
+            background: #252525;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #404040;
+        }
+        
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        
+        .info-label {
+            color: #999;
+            font-weight: 500;
+        }
+        
+        .info-value {
+            color: #e0e0e0;
+            word-break: break-all;
+            text-align: right;
+            max-width: 50%;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            flex: 1;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            background: #0052a3;
+        }
+        
+        button.secondary {
+            background: #404040;
+            color: #e0e0e0;
+        }
+        
+        button.secondary:hover {
+            background: #505050;
+        }
+        
+        .details {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        
+        .section {
+            background: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #404040;
+        }
+        
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #fff;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #404040;
+        }
+        
+        .metadata {
+            display: grid;
+            gap: 12px;
+        }
+        
+        .metadata-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: #252525;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        
+        .metadata-label {
+            color: #999;
+            font-weight: 500;
+        }
+        
+        .metadata-value {
+            color: #e0e0e0;
+            word-break: break-all;
+            max-width: 50%;
+            text-align: right;
+        }
+        
+        .versions-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .version-item {
+            background: #252525;
+            padding: 12px;
+            border-radius: 4px;
+            border-left: 3px solid #0066cc;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .version-item:hover {
+            background: #303030;
+        }
+        
+        .version-sha {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            color: #0066cc;
+            font-weight: 600;
+        }
+        
+        .version-author {
+            font-size: 12px;
+            color: #999;
+            margin-top: 4px;
+        }
+        
+        .version-date {
+            font-size: 11px;
+            color: #666;
+            margin-top: 2px;
+        }
+        
+        .version-message {
+            font-size: 12px;
+            color: #e0e0e0;
+            margin-top: 6px;
+            font-style: italic;
+        }
+        
+        .version-item.selected {
+            background: #303030;
+            border-left-color: #00cc66;
+        }
+        
+        .tag-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            background: #404040;
+            border-radius: 3px;
+            font-size: 11px;
+            margin-right: 5px;
+            color: #aaa;
+        }
+        
+        /* Tablet and below */
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Mobile devices */
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+                padding: 15px;
+            }
+            
+            h1 {
+                font-size: 20px;
+            }
+            
+            .back-link {
+                font-size: 14px;
+            }
+            
+            .container {
+                padding: 15px;
+                gap: 15px;
+            }
+            
+            .preview {
+                padding: 15px;
+            }
+            
+            .preview-info {
+                gap: 10px;
+            }
+            
+            .actions {
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .actions a, .actions button {
+                width: 100%;
+            }
+            
+            button {
+                min-height: 44px;
+                padding: 10px;
+            }
+            
+            .section-title {
+                font-size: 16px;
+                margin-bottom: 12px;
+            }
+            
+            .version-item {
+                padding: 12px;
+                margin-bottom: 10px;
+            }
+            
+            .version-details {
+                font-size: 13px;
+            }
+        }
+        
+        /* Small phones */
+        @media (max-width: 480px) {
+            header {
+                padding: 12px;
+            }
+            
+            h1 {
+                font-size: 18px;
+            }
+            
+            .container {
+                padding: 12px;
+                gap: 12px;
+            }
+            
+            .preview {
+                padding: 12px;
+            }
+            
+            .preview-info {
+                gap: 8px;
+            }
+            
+            .info-row {
+                padding: 8px 0;
+            }
+            
+            .info-label {
+                font-size: 12px;
+            }
+            
+            .info-value {
+                font-size: 13px;
+            }
+            
+            .actions {
+                gap: 6px;
+            }
+            
+            button {
+                padding: 8px;
+                font-size: 13px;
+                min-height: 40px;
+            }
+            
+            video, audio, img {
+                max-height: 300px;
+            }
+            
+            .section-title {
+                font-size: 15px;
+            }
+            
+            .metadata-item {
+                padding: 8px 0;
+            }
+            
+            .metadata-label {
+                font-size: 11px;
+            }
+            
+            .metadata-value {
+                font-size: 12px;
+                font-family: monospace;
+                word-break: break-all;
+            }
+            
+            .version-item {
+                padding: 10px;
+                margin-bottom: 8px;
+            }
+            
+            .version-details {
+                font-size: 12px;
+            }
+            
+            .version-sha {
+                font-size: 11px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="/" class="back-link">← Back to Search</a>
+        <h1>{{ asset.filename }}</h1>
+        <div></div>
+    </header>
+    
+    <div class="container">
+        <!-- Preview Section -->
+        <div class="preview">
+            <div class="preview-image">
+                {% if asset.thumbnail_path %}
+                <img src="/thumbnail/{{ asset.thumbnail_path }}" alt="{{ asset.filename }}">
+                {% else %}
+                <div style="text-align: center; color: #666;">
+                    <div style="font-size: 48px; margin-bottom: 10px;">📄</div>
+                    <div>{{ asset.file_type }}</div>
+                </div>
+                {% endif %}
+            </div>
+            
+            <!-- Media Viewer -->
+            {% if asset.file_type.startswith('image/') %}
+            <div style="background: #252525; padding: 20px; border-radius: 4px; margin-bottom: 20px;">
+                <div style="text-align: center;">
+                    <img src="/view/{{ asset.project }}/{{ asset.filepath }}" 
+                         alt="{{ asset.filename }}"
+                         style="max-width: 100%; max-height: 500px; border-radius: 4px;">
+                </div>
+            </div>
+            {% elif asset.file_type.startswith('video/') %}
+            <div style="background: #252525; padding: 20px; border-radius: 4px; margin-bottom: 20px;">
+                <video width="100%" height="auto" controls style="border-radius: 4px;">
+                    <source src="/view/{{ asset.project }}/{{ asset.filepath }}" type="{{ asset.file_type }}">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+            {% elif asset.file_type.startswith('audio/') %}
+            <div style="background: #252525; padding: 20px; border-radius: 4px; margin-bottom: 20px;">
+                <audio width="100%" controls style="width: 100%;">
+                    <source src="/view/{{ asset.project }}/{{ asset.filepath }}" type="{{ asset.file_type }}">
+                    Your browser does not support the audio tag.
+                </audio>
+            </div>
+            {% endif %}
+            
+            <div class="preview-info">
+                <div class="info-row">
+                    <span class="info-label">Project</span>
+                    <span class="info-value">{{ asset.project }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Type</span>
+                    <span class="info-value">{{ format_file_type(asset.file_type) }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Size</span>
+                    <span class="info-value">{{ format_size(asset.file_size) }}</span>
+                </div>
+                {% if asset.width %}
+                <div class="info-row">
+                    <span class="info-label">Dimensions</span>
+                    <span class="info-value">{{ asset.width }}×{{ asset.height }}px</span>
+                </div>
+                {% endif %}
+                {% if asset.created_date %}
+                <div class="info-row">
+                    <span class="info-label">Created</span>
+                    <span class="info-value">{{ asset.created_date }}</span>
+                </div>
+                {% endif %}
+                <div class="info-row">
+                    <span class="info-label">Indexed</span>
+                    <span class="info-value">{{ asset.indexed_date }}</span>
+                </div>
+            </div>
+            
+            <div class="actions">
+                {% if asset.is_bundle %}
+                <a href="/download-bundle/{{ asset.project }}/{{ asset.bundle_path }}" style="text-decoration: none;">
+                    <button>📦 Download Bundle ({{ asset.bundle_files or '?' }} files)</button>
+                </a>
+                {% else %}
+                <a href="/download/{{ asset.project }}/{{ asset.filepath }}" style="text-decoration: none;">
+                    <button>⬇ Download Latest</button>
+                </a>
+                {% endif %}
+                <button class="secondary" onclick="copyPath('{{ asset.filepath }}')">
+                    📋 Copy Path
+                </button>
+            </div>
+        </div>
+        
+        <!-- Details Section -->
+        <div class="details">
+            <!-- Metadata Section -->
+            <div class="section">
+                <div class="section-title">Asset Information</div>
+                <div class="metadata">
+                    <div class="metadata-item">
+                        <span class="metadata-label">File Path</span>
+                        <span class="metadata-value" style="font-family: monospace; font-size: 11px;">{{ asset.filepath }}</span>
+                    </div>
+                    <div class="metadata-item">
+                        <span class="metadata-label">DVC Hash</span>
+                        <span class="metadata-value" style="font-family: monospace; font-size: 11px;">{{ asset.dvc_hash or 'N/A' }}</span>
+                    </div>
+                    <div class="metadata-item">
+                        <span class="metadata-label">Git Commit</span>
+                        <span class="metadata-value" style="font-family: monospace; font-size: 11px;">{{ asset.git_commit or 'N/A' }}</span>
+                    </div>
+                    {% if asset.tags %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Tags</span>
+                        <span class="metadata-value">
+                            {% for tag in asset.tags.split(',') %}
+                            <span class="tag-badge">{{ tag.strip() }}</span>
+                            {% endfor %}
+                        </span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Version History Section -->
+            <div class="section">
+                <div class="section-title">📜 Version History ({{ versions|length }})</div>
+                {% if versions %}
+                <div class="versions-list" id="versionsList">
+                    {% for version in versions %}
+                    <div class="version-item" onclick="selectVersion('{{ version.hexsha }}', this)">
+                        <div class="version-sha">{{ version.short_sha }}</div>
+                        <div class="version-author">{{ version.author }}</div>
+                        <div class="version-date">{{ version.date }}</div>
+                        {% if version.message %}
+                        <div class="version-message">{{ version.message }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div style="color: #666; text-align: center; padding: 20px;">
+                    No version history available
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function copyPath(path) {
+            navigator.clipboard.writeText(path);
+            const button = event.target;
+            const originalText = button.textContent;
+            button.textContent = '✓ Copied!';
+            setTimeout(() => {
+                button.textContent = originalText;
+            }, 2000);
+        }
+        
+        function selectVersion(sha, element) {
+            // Remove previous selection
+            document.querySelectorAll('.version-item').forEach(el => {
+                el.classList.remove('selected');
+            });
+            // Add selection to clicked item
+            element.classList.add('selected');
+            
+            // You could add functionality here to:
+            // 1. Show download button for this version
+            // 2. Load thumbnail preview for this version
+            // 3. Show version details in a modal
+        }
+    </script>
+</body>
+</html>

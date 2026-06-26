@@ -1,0 +1,7 @@
+Flask
+Pillow
+PyYAML
+python-dotenv
+dvc[s3]
+GitPython
+
