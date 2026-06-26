@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# DAMnation -- Self-hosted Digital Asset Management
+# Copyright (C) 2026 Sean McGrath (github.com/sjmcgra)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# See LICENSE for the full license text.
+# Built with DAMnation -- powering Hokai (hokaiprime.com)
+#
 # dam_post_add.sh — Index assets into DAMnation after a manual dvc add workflow
 #
 # Use this when you've already run dvc add / git commit / dvc push manually
