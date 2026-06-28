@@ -17,22 +17,27 @@
 #
 # Built with DAMnation -- powering Hokai (hokaiprime.com)
 """
-dam_init.py — Initialize a new DAMnation project
+dam_init.py -- Initialize a new DAMnation project
 
 Creates the opinionated directory structure, initializes git and DVC,
 creates (or reuses) an S3 bucket, configures the DVC remote, creates
 a private GitHub repo, and writes a post-add hook script.
 
+DAMnation is opinionated toward S3-compatible object storage.
+Backblaze B2 is supported via its S3-compatible API endpoint -- no
+extra dependencies required, just set STORAGE_PROVIDER=backblaze and
+supply your B2 endpoint and credentials in .env.
+
 Usage:
     python dam_init.py <project_name>
     python dam_init.py <project_name> --projects-root /path/to/projects
-    python dam_init.py <project_name> --bucket my-damnation-bucket
+    python dam_init.py <project_name> --bucket my-bucket --provider backblaze
 
 Prerequisites:
     - git
     - dvc[s3]  (pip install dvc[s3])
     - gh CLI   (https://cli.github.com) authenticated via gh auth login
-    - aws CLI  authenticated with sufficient S3 permissions
+    - aws CLI  (AWS S3 only -- not required for Backblaze)
     - DAMnation .env configured (or pass --bucket / --projects-root)
 """
 
@@ -50,27 +55,13 @@ from config import PROJECTS_ROOT, GH_ORG
 # ---------------------------------------------------------------------------
 
 ASSET_DIRS = [
-    "3d_models",
-    "audacity",
-    "audio",
-    "character_reference",
-    "final_cut_exports",
-    "garageband",
-    "generated_audio",
-    "generated_images",
-    "generated_video",
-    "images",
-    "lip_sync_out",
-    "location_reference",
-    "motion",
-    "motion_out",
-    "photoshop",
-    "photoshop_export",
-    "upscaled_video",
-    "video",
+    "3d_models", "audacity", "audio", "character_reference",
+    "final_cut_exports", "garageband", "generated_audio",
+    "generated_images", "generated_video", "images", "lip_sync_out",
+    "location_reference", "motion", "motion_out", "photoshop",
+    "photoshop_export", "upscaled_video", "video",
 ]
 
-# final_cut/ is created but fully gitignored — FCP cache/media can be enormous
 FINAL_CUT_DIRS = [
     "final_cut/FCP_Cache",
     "final_cut/FCP_Libraries",
@@ -83,8 +74,9 @@ OTHER_DIRS = ["master"]
 # .gitignore written into the project root
 # ---------------------------------------------------------------------------
 
-PROJECT_GITIGNORE = """# DAMnation project — git tracks only .dvc pointer files and config.
-# All actual asset content is managed by DVC and stored in S3.
+PROJECT_GITIGNORE = """\
+# DAMnation project -- git tracks only .dvc pointer files and config.
+# All actual asset content is managed by DVC and stored in S3-compatible storage.
 
 # Ignore asset content inside each subdirectory
 assets/*/
@@ -95,7 +87,7 @@ assets/*/
 # Keep .gitkeep files so empty dirs are tracked
 !assets/*/.gitkeep
 
-# Final Cut Pro — cache and media can be enormous, never commit
+# Final Cut Pro -- cache and media can be enormous, never commit
 final_cut/
 
 # DVC internal cache (local only)
@@ -118,42 +110,48 @@ __pycache__/
 def run(cmd, cwd=None, check=True, capture=False):
     """Run a shell command, print it, and return CompletedProcess."""
     print(f"  $ {' '.join(cmd)}")
-    return subprocess.run(
-        cmd, cwd=cwd, check=check,
-        capture_output=capture, text=True
-    )
+    return subprocess.run(cmd, cwd=cwd, check=check,
+                          capture_output=capture, text=True)
 
 
 def run_silent(cmd, cwd=None):
-    """Run a command, return (returncode, stdout, stderr) without printing output."""
+    """Run a command silently, return (returncode, stdout, stderr)."""
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
-def check_prerequisites():
+def check_prerequisites(provider="aws"):
     """Abort early if required tools are missing."""
-    missing = []
-    for tool in ["git", "dvc", "gh", "aws"]:
-        if shutil.which(tool) is None:
-            missing.append(tool)
+    required = ["git", "dvc", "gh"]
+    if provider == "aws":
+        required.append("aws")
+    missing = [t for t in required if shutil.which(t) is None]
     if missing:
-        print(f"\n✗ Missing required tools: {', '.join(missing)}")
+        print(f"\n[x] Missing required tools: {', '.join(missing)}")
         print("  Install them before running dam_init.py")
         print("  - dvc:  pip install dvc[s3]")
         print("  - gh:   https://cli.github.com")
-        print("  - aws:  https://aws.amazon.com/cli/")
+        if provider == "aws":
+            print("  - aws:  https://aws.amazon.com/cli/")
         sys.exit(1)
 
 
-def ensure_s3_bucket(bucket, region):
-    """Create S3 bucket if it doesn't already exist."""
+def ensure_s3_bucket(bucket, region, provider="aws"):
+    """Create S3 bucket if it does not already exist.
+
+    Backblaze B2 does not support bucket creation via the S3-compatible API.
+    For B2, create the bucket manually in the Backblaze console first.
+    """
+    if provider == "backblaze":
+        print(f"  [i] Backblaze: bucket creation via API not supported.")
+        print(f"      Create s3://{bucket} manually at backblaze.com if it does not exist.")
+        return
     rc, _, _ = run_silent(["aws", "s3", "ls", f"s3://{bucket}"])
     if rc == 0:
-        print(f"  ✓ S3 bucket already exists: s3://{bucket}")
+        print(f"  [ok] S3 bucket already exists: s3://{bucket}")
         return
     print(f"  Creating S3 bucket: s3://{bucket} in {region}")
     cmd = ["aws", "s3", "mb", f"s3://{bucket}", "--region", region]
-    # us-east-1 does not accept a LocationConstraint
     if region != "us-east-1":
         cmd += ["--create-bucket-configuration", f"LocationConstraint={region}"]
     run(cmd)
@@ -163,46 +161,44 @@ def init_git(project_path, project_name, gh_org, github_private, adopt=False):
     """git init, initial commit, create GitHub repo, push."""
     git_dir = project_path / ".git"
     if adopt and git_dir.exists():
-        print(f"  ✓ Git already initialized — skipping git init")
+        print("  [ok] Git already initialized -- skipping git init")
     else:
         run(["git", "init"], cwd=project_path)
         run(["git", "checkout", "-b", "main"], cwd=project_path)
 
-    # Write .gitignore (always — may be missing in adopted projects)
     gitignore_path = project_path / ".gitignore"
     if not gitignore_path.exists():
         gitignore_path.write_text(PROJECT_GITIGNORE)
-        print(f"  ✓ Wrote .gitignore")
+        print("  [ok] Wrote .gitignore")
     else:
-        print(f"  ✓ .gitignore already exists — leaving untouched")
+        print("  [ok] .gitignore already exists -- leaving untouched")
 
-    # Check if remote already exists
     rc, remotes, _ = run_silent(["git", "remote"], cwd=project_path)
     if adopt and "origin" in remotes.split():
-        print(f"  ✓ Git remote already configured — skipping GitHub repo creation")
+        print("  [ok] Git remote already configured -- skipping GitHub repo creation")
         return
 
     run(["git", "add", "-A"], cwd=project_path)
     rc, _, _ = run_silent(["git", "diff", "--cached", "--quiet"], cwd=project_path)
-    if rc != 0:  # there are staged changes
+    if rc != 0:
         run(["git", "commit", "-m", "chore: init project"], cwd=project_path)
 
-    # Create GitHub repo
     visibility = "--private" if github_private else "--public"
     run(["gh", "repo", "create", f"{gh_org}/{project_name}",
          visibility, "--source", str(project_path), "--remote", "origin", "--push"],
         cwd=project_path)
-    print(f"  ✓ GitHub repo created: github.com/{gh_org}/{project_name}")
+    print(f"  [ok] GitHub repo created: github.com/{gh_org}/{project_name}")
 
 
-def init_dvc(project_path, project_name, bucket, region, adopt=False):
-    """dvc init, configure S3 remote, initial dvc push of config."""
+def init_dvc(project_path, project_name, bucket, region,
+             provider="aws", endpoint_url="", adopt=False):
+    """dvc init, configure S3-compatible remote, commit config."""
     dvc_dir = project_path / ".dvc"
     if adopt and dvc_dir.exists():
-        print(f"  ✓ DVC already initialized — checking remote...")
+        print("  [ok] DVC already initialized -- checking remote...")
         rc, out, _ = run_silent(["dvc", "remote", "list"], cwd=project_path)
         if out.strip():
-            print(f"  ✓ DVC remote already configured — skipping")
+            print("  [ok] DVC remote already configured -- skipping")
             return
     else:
         run(["dvc", "init"], cwd=project_path)
@@ -212,19 +208,24 @@ def init_dvc(project_path, project_name, bucket, region, adopt=False):
     run(["dvc", "remote", "add", "-d", remote_name, remote_url], cwd=project_path)
     run(["dvc", "remote", "modify", remote_name, "region", region], cwd=project_path)
 
-    # Commit DVC config into git
+    if provider == "backblaze" and endpoint_url:
+        run(["dvc", "remote", "modify", remote_name,
+             "endpointurl", endpoint_url], cwd=project_path)
+        print(f"  [ok] Backblaze endpoint: {endpoint_url}")
+
+    commit_msg = f"chore: init dvc with {'backblaze' if provider == 'backblaze' else 's3'} remote"
     run(["git", "add", ".dvc/config", ".dvcignore"], cwd=project_path)
-    run(["git", "commit", "-m", "chore: init dvc with s3 remote"], cwd=project_path)
+    run(["git", "commit", "-m", commit_msg], cwd=project_path)
     run(["git", "push", "origin", "main"], cwd=project_path)
-    print(f"  ✓ DVC remote: {remote_url}")
+    print(f"  [ok] DVC remote: {remote_url}")
 
 
 def write_dam_sync(project_path, project_name, dam_dir):
-    pass  # removed — dam_sync.sh now lives in the damnation repo root
+    pass  # dam_sync.sh lives in the damnation repo root
 
 
 def write_post_add_hook(project_path, project_name, dam_dir):
-    pass  # removed — dam_post_add.sh now lives in the damnation repo root
+    pass  # dam_post_add.sh lives in the damnation repo root
 
 
 # ---------------------------------------------------------------------------
@@ -238,83 +239,87 @@ def main():
         description="Initialize a new DAMnation-managed project."
     )
     parser.add_argument("project_name",
-                        help="Short project name, e.g. hokai_ep2 (used as directory name, GitHub repo name, and S3 prefix)")
-    parser.add_argument("--projects-root",
-                        default=str(PROJECTS_ROOT),
+                        help="Short project name, e.g. hokai_ep2")
+    parser.add_argument("--projects-root", default=str(PROJECTS_ROOT),
                         help=f"Root directory for all projects (default: {PROJECTS_ROOT})")
-    parser.add_argument("--bucket",
-                        default=os.getenv("DVC_S3_BUCKET", ""),
-                        help="S3 bucket name (or set DVC_S3_BUCKET in .env)")
-    parser.add_argument("--region",
-                        default=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-                        help="AWS region (default: us-east-1)")
-    parser.add_argument("--gh-org",
-                        default=GH_ORG,
+    parser.add_argument("--bucket", default=os.getenv("DVC_S3_BUCKET", ""),
+                        help="Storage bucket name (or set DVC_S3_BUCKET in .env)")
+    parser.add_argument("--region", default=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+                        help="Storage region (default: us-east-1)")
+    parser.add_argument("--provider",
+                        choices=["aws", "backblaze"],
+                        default=os.getenv("STORAGE_PROVIDER", "aws"),
+                        help="Storage provider: aws (default) or backblaze. "
+                             "Both use the S3-compatible API. "
+                             "Backblaze requires --endpoint-url or B2_ENDPOINT_URL in .env.")
+    parser.add_argument("--endpoint-url",
+                        default=os.getenv("B2_ENDPOINT_URL", ""),
+                        help="S3-compatible endpoint URL (Backblaze only, "
+                             "e.g. https://s3.us-west-004.backblazeb2.com)")
+    parser.add_argument("--gh-org", default=GH_ORG,
                         help=f"GitHub org or username (default: {GH_ORG})")
-    parser.add_argument("--adopt",
-                        action="store_true",
-                        help="Adopt an existing project directory instead of creating a new one. "
-                             "Skips directory creation, wires up git, DVC, GitHub, and writes the post-add hook.")
-    parser.add_argument("--public",
-                        action="store_true",
+    parser.add_argument("--adopt", action="store_true",
+                        help="Adopt an existing project directory -- skips dir creation, "
+                             "wires up git, DVC, and GitHub non-destructively.")
+    parser.add_argument("--public", action="store_true",
                         help="Create GitHub repo as public (default: private)")
     args = parser.parse_args()
 
     if not args.bucket:
-        print("\n✗ S3 bucket name required.")
+        print("\n[x] Storage bucket name required.")
         print("  Set DVC_S3_BUCKET in your .env or pass --bucket <name>")
         sys.exit(1)
 
-    project_name  = args.project_name
-    projects_root = Path(args.projects_root).expanduser()
-    project_path  = projects_root / project_name
-    github_private = not args.public
+    if args.provider == "backblaze" and not args.endpoint_url:
+        print("\n[x] Backblaze requires an endpoint URL.")
+        print("  Set B2_ENDPOINT_URL in your .env or pass --endpoint-url")
+        print("  Example: https://s3.us-west-004.backblazeb2.com")
+        sys.exit(1)
 
-    print(f"\n🎬 DAMnation project init")
-    print(f"   Project : {project_name}")
-    print(f"   Path    : {project_path}")
-    print(f"   GitHub  : github.com/{args.gh_org}/{project_name} ({'private' if github_private else 'public'})")
-    print(f"   S3      : s3://{args.bucket}/{project_name}/")
-    print(f"   Region  : {args.region}")
+    project_name   = args.project_name
+    projects_root  = Path(args.projects_root).expanduser()
+    project_path   = projects_root / project_name
+    github_private = not args.public
+    provider       = args.provider
+
+    print(f"\n[dam] DAMnation project init")
+    print(f"   Project  : {project_name}")
+    print(f"   Path     : {project_path}")
+    print(f"   GitHub   : github.com/{args.gh_org}/{project_name} "
+          f"({'private' if github_private else 'public'})")
+    print(f"   Storage  : s3://{args.bucket}/{project_name}/  [{provider}]")
+    if provider == "backblaze":
+        print(f"   Endpoint : {args.endpoint_url}")
+    print(f"   Region   : {args.region}")
     print()
 
     # --- Preflight ---
-    check_prerequisites()
+    check_prerequisites(provider=provider)
 
     if args.adopt:
         if not project_path.exists():
-            print(f"✗ Directory not found: {project_path}")
-            print(f"  Use without --adopt to create a new project.")
+            print(f"[x] Directory not found: {project_path}")
+            print("  Use without --adopt to create a new project.")
             sys.exit(1)
         print(f"  Adopting existing directory: {project_path}")
     else:
         if project_path.exists():
-            print(f"✗ Directory already exists: {project_path}")
-            print(f"  Use --adopt to wire up an existing project directory.")
+            print(f"[x] Directory already exists: {project_path}")
+            print("  Use --adopt to wire up an existing project directory.")
             sys.exit(1)
 
-    # --- Create directory tree (new projects only) ---
+    # --- Directory tree ---
+    all_dirs = [f"assets/{d}" for d in ASSET_DIRS] + FINAL_CUT_DIRS + OTHER_DIRS
     if not args.adopt:
         print("\n[ 1 / 5 ] Creating directory tree...")
-        all_dirs = (
-            [f"assets/{d}" for d in ASSET_DIRS]
-            + FINAL_CUT_DIRS
-            + OTHER_DIRS
-        )
         for d in all_dirs:
             dir_path = project_path / d
             dir_path.mkdir(parents=True, exist_ok=True)
             (dir_path / ".gitkeep").touch()
-        print(f"  ✓ {len(all_dirs)} directories created")
+        print(f"  [ok] {len(all_dirs)} directories created")
     else:
-        print("\n[ 1 / 5 ] Directory tree — skipped (adopting existing)")
-        # Still ensure all expected asset subdirs exist, non-destructively
+        print("\n[ 1 / 5 ] Directory tree -- skipped (adopting existing)")
         created = []
-        all_dirs = (
-            [f"assets/{d}" for d in ASSET_DIRS]
-            + FINAL_CUT_DIRS
-            + OTHER_DIRS
-        )
         for d in all_dirs:
             dir_path = project_path / d
             if not dir_path.exists():
@@ -322,13 +327,13 @@ def main():
                 (dir_path / ".gitkeep").touch()
                 created.append(d)
         if created:
-            print(f"  ✓ Added {len(created)} missing directories: {', '.join(created)}")
+            print(f"  [ok] Added {len(created)} missing directories")
         else:
-            print(f"  ✓ All expected directories already present")
+            print("  [ok] All expected directories already present")
 
     # --- S3 bucket ---
-    print("\n[ 2 / 5 ] S3 bucket...")
-    ensure_s3_bucket(args.bucket, args.region)
+    print("\n[ 2 / 5 ] Storage bucket...")
+    ensure_s3_bucket(args.bucket, args.region, provider=provider)
 
     # --- Git ---
     print("\n[ 3 / 5 ] Git + GitHub...")
@@ -336,15 +341,13 @@ def main():
 
     # --- DVC ---
     print("\n[ 4 / 5 ] DVC...")
-    init_dvc(project_path, project_name, args.bucket, args.region, adopt=args.adopt)
+    init_dvc(project_path, project_name, args.bucket, args.region,
+             provider=provider, endpoint_url=args.endpoint_url, adopt=args.adopt)
 
     # --- Done ---
     print("\n[ 5 / 5 ] Done.")
-
-    # --- Summary ---
-    dam_dir_str = str(Path(__file__).resolve().parent)
     print(f"""
-✓ Project ready: {project_path}
+[ok] Project ready: {project_path}
 
 To sync assets into DAMnation, run from the damnation directory:
 

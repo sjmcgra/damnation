@@ -423,6 +423,7 @@ class DAMIndexer:
 
         # Second pass: update only system-derived fields on existing rows.
         # Deliberately excludes: tags, ai_description (human-curated).
+        # Also excludes: git_commit (keeps the commit when first indexed).
         if c.rowcount == 0:
             c.execute('''
                 UPDATE assets SET
@@ -434,7 +435,6 @@ class DAMIndexer:
                     dvc_hash      = ?,
                     thumbnail_path = ?,
                     indexed_date  = ?,
-                    git_commit    = ?,
                     is_bundle     = ?,
                     bundle_path   = ?,
                     bundle_files  = ?
@@ -448,7 +448,6 @@ class DAMIndexer:
                 metadata.get('dvc_hash'),
                 metadata.get('thumbnail_path'),
                 metadata['indexed_date'],
-                metadata['git_commit'],
                 metadata.get('is_bundle', False),
                 metadata.get('bundle_path'),
                 metadata.get('bundle_files'),

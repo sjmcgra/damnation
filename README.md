@@ -82,6 +82,33 @@ docker compose up --build -d
 
 Open http://localhost:5500 (or the port set in `WEB_PORT`).
 
+## Storage backends
+
+DAMnation is opinionated toward S3-compatible object storage. Both AWS S3 and Backblaze B2 are supported with no extra dependencies -- they use the same `dvc[s3]` package via B2's S3-compatible API.
+
+**AWS S3** (default):
+```bash
+STORAGE_PROVIDER=aws
+DVC_S3_BUCKET=your-bucket
+AWS_DEFAULT_REGION=us-east-1
+```
+
+**Backblaze B2** (significantly cheaper at $6/TB/month vs $23/TB for S3):
+```bash
+STORAGE_PROVIDER=backblaze
+DVC_S3_BUCKET=your-b2-bucket
+B2_ENDPOINT_URL=https://s3.us-west-004.backblazeb2.com
+AWS_ACCESS_KEY_ID=your-b2-keyID
+AWS_SECRET_ACCESS_KEY=your-b2-applicationKey
+```
+
+For Backblaze, create the bucket manually in the [Backblaze console](https://www.backblaze.com) first -- bucket creation via the S3-compatible API is not supported by B2. The endpoint URL region must match your bucket's region.
+
+Then init your project normally:
+```bash
+python dam_init.py my_project --provider backblaze
+```
+
 ## Initializing a new project
 
 Run `dam_init.py` once per project to set up the directory tree, git repo, DVC, and S3:
