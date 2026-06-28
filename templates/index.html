@@ -557,7 +557,7 @@
     {% if results %}
     <div class="grid">
         {% for asset in results %}
-        <a href="/asset/{{ asset.id }}" class="card">
+        <a href="/asset/{{ asset.id }}?return_to={{ request.url | urlencode }}" class="card">
             <div class="card-image">
                 {% if asset.thumbnail_path %}
                 <img src="/thumbnail/{{ asset.thumbnail_path }}" alt="{{ asset.filename }}">

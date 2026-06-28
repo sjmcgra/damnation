@@ -344,6 +344,9 @@ def view_file(project, filepath):
 @app.route('/asset/<int:asset_id>')
 def asset_detail(asset_id):
     """Show asset detail page with versions and download options"""
+    # Capture the referring search URL so the back link returns to the right place
+    return_to = request.args.get('return_to', '/')
+
     db = get_db()
     asset = db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
     
@@ -376,6 +379,7 @@ def asset_detail(asset_id):
     return render_template('asset_detail.html', 
                          asset=asset, 
                          versions=versions,
+                         return_to=return_to,
                          format_size=format_size,
                          format_file_type=format_file_type)
 
