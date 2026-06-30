@@ -283,6 +283,52 @@
         .version-item:last-child {
             border-bottom: none;
         }
+
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .status-badge.used {
+            background: #0a5f1b;
+            color: #c7f7d4;
+        }
+
+        .status-badge.unused {
+            background: #4b4b4b;
+            color: #d4d4d4;
+        }
+
+        .review-status-badge {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .review-status-badge.approved {
+            background: #1f7a18;
+            color: #d7f5d6;
+        }
+
+        .review-status-badge.favorite {
+            background: #b96fe7;
+            color: #f8e8ff;
+        }
+
+        .review-status-badge.rejected {
+            background: #b02a21;
+            color: #ffe1e1;
+        }
         
         .version-sha {
             font-family: 'Courier New', monospace;
@@ -318,6 +364,23 @@
             padding: 20px;
             margin-bottom: 20px;
             flex-wrap: wrap;
+        }
+
+        .status-key {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+            font-size: 11px;
+            color: #ddd;
+        }
+
+        .status-key .review-status-badge {
+            margin-left: 0;
+            text-transform: none;
+            font-size: 10px;
+            letter-spacing: 0.02em;
         }
         
         .btn-pagination {
@@ -543,21 +606,41 @@
                     <option value="motion" {% if selected_type == 'motion' %}selected{% endif %}>Motion</option>
                     <option value="garageband" {% if selected_type == 'garageband' %}selected{% endif %}>GarageBand</option>
                 </select>
+
+                <select name="used" onchange="this.form.submit()">
+                    <option value="" {% if selected_used == '' %}selected{% endif %}>All Usage</option>
+                    <option value="used" {% if selected_used == 'used' %}selected{% endif %}>Used</option>
+                    <option value="unused" {% if selected_used == 'unused' %}selected{% endif %}>Unused</option>
+                </select>
+
+                <select name="status" onchange="this.form.submit()">
+                    <option value="" {% if selected_status == '' %}selected{% endif %}>All Review Status</option>
+                    <option value="approved" {% if selected_status == 'approved' %}selected{% endif %}>Approved</option>
+                    <option value="favorite" {% if selected_status == 'favorite' %}selected{% endif %}>Favorite</option>
+                    <option value="rejected" {% if selected_status == 'rejected' %}selected{% endif %}>Rejected</option>
+                    <option value="none" {% if selected_status == 'none' %}selected{% endif %}>No Status</option>
+                </select>
             </div>
         </form>
     </header>
     
     <div class="stats">
         <div>Showing <strong>{{ results|length }}</strong> of <strong>{{ total_count }}</strong> assets{% if query %} for "<strong>{{ query }}</strong>"{% endif %}{% if not show_all %} (Page {{ page }}/{{ total_pages }}){% endif %}</div>
+        <div class="status-key">
+            <span class="review-status-badge approved">Approved</span>
+            <span class="review-status-badge favorite">Favorite</span>
+            <span class="review-status-badge rejected">Rejected</span>
+            <span class="review-status-badge">No Status</span>
+        </div>
         <div>
-            {% if not show_all %}<a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&all=true">Show All</a> | {% endif %}<a href="/stats">📊 Statistics</a>
+            {% if not show_all %}<a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&used={{ selected_used }}&status={{ selected_status }}&all=true">Show All</a> | {% endif %}<a href="/stats">📊 Statistics</a>
         </div>
     </div>
     
     {% if results %}
     <div class="grid">
         {% for asset in results %}
-        <a href="/asset/{{ asset.id }}" class="card">
+        <a href="/asset/{{ asset.id }}?return_to={{ request.url | urlencode }}" class="card">
             <div class="card-image">
                 {% if asset.thumbnail_path %}
                 <img src="/thumbnail/{{ asset.thumbnail_path }}" alt="{{ asset.filename }}">
@@ -570,6 +653,17 @@
             <div class="card-content">
                 <div class="card-title" title="{{ asset.filename }}">
                     {{ asset.filename }}
+                </div>
+
+                <div class="card-meta">
+                    {% if asset.used %}
+                    <span class="status-badge used">Used</span>
+                    {% else %}
+                    <span class="status-badge unused">Unused</span>
+                    {% endif %}
+                    {% if asset.review_status %}
+                    <span class="review-status-badge {{ asset.review_status }}">{{ asset.review_status.capitalize() }}</span>
+                    {% endif %}
                 </div>
                 
                 <div class="card-meta">
@@ -638,7 +732,7 @@
     {% if not show_all and total_pages > 1 %}
     <div class="pagination">
         {% if has_prev %}
-        <a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&page={{ page - 1 }}" class="btn-pagination">← Previous</a>
+        <a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&used={{ selected_used }}&status={{ selected_status }}&page={{ page - 1 }}" class="btn-pagination">← Previous</a>
         {% else %}
         <span class="btn-pagination-disabled">← Previous</span>
         {% endif %}
@@ -648,7 +742,7 @@
         </div>
         
         {% if has_next %}
-        <a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&page={{ page + 1 }}" class="btn-pagination">Next →</a>
+        <a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&used={{ selected_used }}&status={{ selected_status }}&page={{ page + 1 }}" class="btn-pagination">Next →</a>
         {% else %}
         <span class="btn-pagination-disabled">Next →</span>
         {% endif %}

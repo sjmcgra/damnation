@@ -229,6 +229,12 @@ python dam_get.py <project> <filepath>
 python fcpxml_audit.py path/to/library.fcpxmld
 python fcpxml_audit.py path/to/Info.fcpxml --unused-only --csv report.csv
 
+Run audit with extra DAM update:
+
+python fcpxml_audit.py /path/to/Info.fcpxml --mark-used-in-dam
+Optionally restrict to a project:
+python fcpxml_audit.py /path/to/Info.fcpxml --mark-used-in-dam --dam-project hokai_ep1
+
 # Clean up duplicate database entries
 python cleanup_duplicates.py
 python cleanup_duplicates.py --dry-run   # preview first

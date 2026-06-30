@@ -104,13 +104,15 @@ for subdir_path in "${SUBDIRS[@]}"; do
     continue
   fi
 
+  # Always run dvc add, even if already tracked -- DVC diffs the directory
+  # contents and no-ops quickly if nothing changed. Skipping this step
+  # entirely means new/changed files in a previously-tracked subdir never
+  # get picked up.
   if [ -f "$dvc_file" ]; then
-    echo "  = $subdir ($file_count files, already tracked)"
-    SKIPPED=$((SKIPPED + 1))
-    continue
+    echo "  ~ $subdir ($file_count files, checking for changes)"
+  else
+    echo "  + $subdir ($file_count files, new)"
   fi
-
-  echo "  + $subdir ($file_count files)"
   dvc add "$subdir_path" && TRACKED=$((TRACKED + 1)) || echo "  ✗ Failed to track: $subdir"
 done
 

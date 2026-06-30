@@ -83,6 +83,14 @@
             padding: 8px 0;
             border-bottom: 1px solid #404040;
         }
+
+        .info-value.used {
+            color: #7edb7e;
+        }
+
+        .info-value.unused {
+            color: #d4d4d4;
+        }
         
         .info-row:last-child {
             border-bottom: none;
@@ -238,6 +246,53 @@
             margin-right: 5px;
             color: #aaa;
         }
+
+        .tag-input-wrapper {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .tag-input-wrapper input,
+        .tag-input-wrapper select {
+            flex: 1;
+            min-width: 240px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            border: 1px solid #505050;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+
+        .tag-input-wrapper input:focus,
+        .tag-input-wrapper select:focus {
+            outline: none;
+            border-color: #7edb7e;
+        }
+
+        .status-pill {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            text-transform: capitalize;
+        }
+
+        .status-approved {
+            background: #1f8a3a;
+            color: #fff;
+        }
+
+        .status-rejected {
+            background: #b02b2b;
+            color: #fff;
+        }
+
+        .status-favorite {
+            background: #e6b800;
+            color: #111;
+        }
         
         /* Tablet and below */
         @media (max-width: 1024px) {
@@ -389,7 +444,7 @@
 </head>
 <body>
     <header>
-        <a href="/" class="back-link">← Back to Search</a>
+        <a href="{{ return_to }}" class="back-link">← Back to Search</a>
         <h1>{{ asset.filename }}</h1>
         <div></div>
     </header>
@@ -462,6 +517,10 @@
                     <span class="info-label">Indexed</span>
                     <span class="info-value">{{ asset.indexed_date }}</span>
                 </div>
+                <div class="info-row">
+                    <span class="info-label">Used</span>
+                    <span class="info-value">{{ 'Yes' if asset.used else 'No' }}</span>
+                </div>
             </div>
             
             <div class="actions">
@@ -498,16 +557,47 @@
                         <span class="metadata-label">Git Commit</span>
                         <span class="metadata-value" style="font-family: monospace; font-size: 11px;">{{ asset.git_commit or 'N/A' }}</span>
                     </div>
-                    {% if asset.tags %}
-                    <div class="metadata-item">
-                        <span class="metadata-label">Tags</span>
-                        <span class="metadata-value">
-                            {% for tag in asset.tags.split(',') %}
-                            <span class="tag-badge">{{ tag.strip() }}</span>
-                            {% endfor %}
+                    <div class="metadata-item metadata-status">
+                        <span class="metadata-label">Review Status</span>
+                        <span class="metadata-value tag-input-wrapper">
+                            <select id="assetStatusInput">
+                                <option value="" {% if not asset.review_status %}selected{% endif %}>None</option>
+                                <option value="approved" {% if asset.review_status == 'approved' %}selected{% endif %}>Approved</option>
+                                <option value="rejected" {% if asset.review_status == 'rejected' %}selected{% endif %}>Rejected</option>
+                                <option value="favorite" {% if asset.review_status == 'favorite' %}selected{% endif %}>Favorite</option>
+                            </select>
+                            <button class="btn-small secondary" type="button" onclick="saveStatus({{ asset.id }}, this)">Save</button>
                         </span>
                     </div>
-                    {% endif %}
+                    <div class="metadata-item metadata-tags">
+                        <span class="metadata-label">Tags</span>
+                        <span class="metadata-value tag-input-wrapper">
+                            <input id="assetTagsInput" type="text" value="{{ asset.tags }}" placeholder="add, tags, here" autocomplete="off" />
+                            <button class="btn-small secondary" type="button" onclick="saveTags({{ asset.id }}, this)">Save</button>
+                        </span>
+                    </div>
+                    <div class="metadata-item">
+                        <span class="metadata-label">Current tags</span>
+                        <span class="metadata-value" id="tagBadges">
+                            {% if asset.tags %}
+                                {% for tag in asset.tags.split(',') %}
+                                <span class="tag-badge">{{ tag.strip() }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span style="color: #999;">No tags assigned</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="metadata-item">
+                        <span class="metadata-label">Current status</span>
+                        <span class="metadata-value" id="statusBadge">
+                            {% if asset.review_status %}
+                                <span class="status-pill status-{{ asset.review_status }}">{{ asset.review_status.capitalize() }}</span>
+                            {% else %}
+                                <span style="color: #999;">None</span>
+                            {% endif %}
+                        </span>
+                    </div>
                 </div>
             </div>
             
@@ -547,6 +637,86 @@
             }, 2000);
         }
         
+        async function saveTags(assetId, button) {
+            const input = document.getElementById('assetTagsInput');
+            const tags = input.value.trim();
+            const originalText = button.textContent;
+            button.textContent = 'Saving...';
+            button.disabled = true;
+
+            try {
+                const response = await fetch(`/api/assets/${assetId}/tags`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ tags })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    const tagsContainer = document.getElementById('tagBadges');
+                    const tagsArray = result.tags ? result.tags.split(',') : [];
+                    if (tagsArray.length) {
+                        tagsContainer.innerHTML = tagsArray.map(tag => `<span class="tag-badge">${tag}</span>`).join(' ');
+                    } else {
+                        tagsContainer.innerHTML = '<span style="color: #999;">No tags assigned</span>';
+                    }
+                    button.textContent = 'Saved';
+                } else {
+                    console.error('Tag save failed', result.error);
+                    button.textContent = 'Error';
+                }
+            } catch (err) {
+                console.error(err);
+                button.textContent = 'Error';
+            } finally {
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }, 1500);
+            }
+        }
+
+        async function saveStatus(assetId, button) {
+            const select = document.getElementById('assetStatusInput');
+            const status = select.value;
+            const originalText = button.textContent;
+            button.textContent = 'Saving...';
+            button.disabled = true;
+
+            try {
+                const response = await fetch(`/api/assets/${assetId}/status`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    const statusContainer = document.getElementById('statusBadge');
+                    if (result.review_status) {
+                        statusContainer.innerHTML = `<span class="status-pill status-${result.review_status}">${result.review_status.charAt(0).toUpperCase() + result.review_status.slice(1)}</span>`;
+                    } else {
+                        statusContainer.innerHTML = '<span style="color: #999;">None</span>';
+                    }
+                    button.textContent = 'Saved';
+                } else {
+                    console.error('Status save failed', result.error);
+                    button.textContent = 'Error';
+                }
+            } catch (err) {
+                console.error(err);
+                button.textContent = 'Error';
+            } finally {
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }, 1500);
+            }
+        }
+
         function selectVersion(sha, element) {
             // Remove previous selection
             document.querySelectorAll('.version-item').forEach(el => {

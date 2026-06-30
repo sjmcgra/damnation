@@ -38,10 +38,13 @@ Usage:
 import sys
 import csv
 import argparse
+import sqlite3
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from collections import defaultdict
 from urllib.parse import unquote
+
+from config import DB_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +336,57 @@ def write_csv(output_path, resources, browser_clips, timeline_refs, video_only=F
 
 
 # ---------------------------------------------------------------------------
+# DAM integration helpers
+# ---------------------------------------------------------------------------
+
+def ensure_used_column_exists(conn):
+    """Ensure the assets.used column exists in the DAM database."""
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(assets)")
+    existing_columns = {row[1] for row in c.fetchall()}
+    if "used" not in existing_columns:
+        c.execute("ALTER TABLE assets ADD COLUMN used INTEGER DEFAULT 0")
+        conn.commit()
+
+
+def mark_clips_used_in_dam(used_refs, resources, project=None, dry_run=False):
+    """Mark DAM assets as used by matching filenames from the FCPXML audit."""
+    filenames = sorted({
+        resources[ref]["filename"]
+        for ref in used_refs
+        if resources.get(ref, {}).get("filename")
+    })
+    if not filenames:
+        return 0
+
+    if dry_run:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            ensure_used_column_exists(conn)
+        finally:
+            conn.close()
+        return len(filenames)
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        ensure_used_column_exists(conn)
+        c = conn.cursor()
+        placeholders = ",".join("?" for _ in filenames)
+        sql = f"UPDATE assets SET used=1 WHERE filename IN ({placeholders})"
+        params = list(filenames)
+        if project:
+            sql += " AND project=?"
+            params.append(project)
+
+        result = c.execute(sql, params)
+        affected = result.rowcount
+        conn.commit()
+        return affected
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -348,6 +402,12 @@ def main():
                         help="Show only unused clips in terminal output")
     parser.add_argument("--video-only",  action="store_true",
                         help="Limit audit to video-bearing clips")
+    parser.add_argument("--mark-used-in-dam", action="store_true",
+                        help="Mark used clips as used in the DAM database")
+    parser.add_argument("--dam-project", metavar="PROJECT",
+                        help="Restrict DAM mark-used updates to a specific project")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show how many DAM assets would be marked without applying changes")
     args = parser.parse_args()
 
     fcpxml_path = Path(args.fcpxml).expanduser().resolve()
@@ -390,6 +450,19 @@ def main():
 
     print_report(resources, browser_clips, timeline_refs,
                  unused_only=args.unused_only, video_only=args.video_only)
+
+    if args.mark_used_in_dam:
+        used_ids = {ref for ref in browser_clips if ref in timeline_refs}
+        affected = mark_clips_used_in_dam(
+            used_ids,
+            resources,
+            project=args.dam_project,
+            dry_run=args.dry_run,
+        )
+        if args.dry_run:
+            print(f"  ✓ DRY RUN: {affected} DAM assets would be marked as used")
+        else:
+            print(f"  ✓ DAM update: marked {affected} assets as used")
 
     if args.csv:
         write_csv(args.csv, resources, browser_clips, timeline_refs,
