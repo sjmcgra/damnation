@@ -382,6 +382,28 @@
             font-size: 10px;
             letter-spacing: 0.02em;
         }
+
+        .review-status-inline {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-top: 8px;
+        }
+
+        .review-status-inline select {
+            flex: 1;
+            min-width: 110px;
+            padding: 6px 8px;
+            font-size: 11px;
+            border-radius: 3px;
+        }
+
+        .review-status-inline .btn-small {
+            flex: 0 0 auto;
+            min-width: 56px;
+            padding: 6px 8px;
+            font-size: 11px;
+        }
         
         .btn-pagination {
             padding: 10px 15px;
@@ -662,8 +684,20 @@
                     <span class="status-badge unused">Unused</span>
                     {% endif %}
                     {% if asset.review_status %}
-                    <span class="review-status-badge {{ asset.review_status }}">{{ asset.review_status.capitalize() }}</span>
+                    <span id="review-status-badge-{{ asset.id }}" class="review-status-badge {{ asset.review_status }}">{{ asset.review_status.capitalize() }}</span>
+                    {% else %}
+                    <span id="review-status-badge-{{ asset.id }}" class="review-status-badge"></span>
                     {% endif %}
+                </div>
+
+                <div class="review-status-inline">
+                    <select id="review-status-select-{{ asset.id }}" aria-label="Review status">
+                        <option value="" {% if not asset.review_status %}selected{% endif %}>None</option>
+                        <option value="approved" {% if asset.review_status == 'approved' %}selected{% endif %}>Approved</option>
+                        <option value="rejected" {% if asset.review_status == 'rejected' %}selected{% endif %}>Rejected</option>
+                        <option value="favorite" {% if asset.review_status == 'favorite' %}selected{% endif %}>Favorite</option>
+                    </select>
+                    <button class="btn-small secondary" type="button" onclick="saveReviewStatus(event, {{ asset.id }}, this)">Save</button>
                 </div>
                 
                 <div class="card-meta">
@@ -771,6 +805,50 @@
             element.textContent = container.classList.contains('expanded') ? 
                 '📜 Version history (' + (container.querySelectorAll('.version-item').length) + ') - click to collapse' :
                 '📜 Version history (' + (container.querySelectorAll('.version-item').length) + ')';
+        }
+    }
+
+    async function saveReviewStatus(event, assetId, button) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const select = document.getElementById(`review-status-select-${assetId}`);
+        const status = select ? select.value : '';
+        const originalText = button.textContent;
+        button.textContent = 'Saving...';
+        button.disabled = true;
+
+        try {
+            const response = await fetch(`/api/assets/${assetId}/status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status })
+            });
+            const result = await response.json();
+            if (result.success) {
+                const badge = document.getElementById(`review-status-badge-${assetId}`);
+                if (badge) {
+                    if (result.review_status) {
+                        badge.className = `review-status-badge ${result.review_status}`;
+                        badge.textContent = result.review_status.charAt(0).toUpperCase() + result.review_status.slice(1);
+                    } else {
+                        badge.className = 'review-status-badge';
+                        badge.textContent = '';
+                    }
+                }
+                button.textContent = 'Saved';
+            } else {
+                console.error('Status save failed', result.error);
+                button.textContent = 'Error';
+            }
+        } catch (err) {
+            console.error(err);
+            button.textContent = 'Error';
+        } finally {
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+            }, 1500);
         }
     }
 </script>
