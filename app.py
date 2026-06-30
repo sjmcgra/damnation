@@ -40,10 +40,28 @@ def get_db():
     try:
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
+        ensure_review_status_column(conn)
         return conn
     except Exception as e:
         print(f"Database connection error: {e}")
         raise
+
+
+def ensure_review_status_column(conn):
+    """Ensure the review_status column exists in the assets table."""
+    try:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(assets)")
+        existing_columns = {row[1] for row in c.fetchall()}
+        if 'review_status' not in existing_columns:
+            c.execute("ALTER TABLE assets ADD COLUMN review_status TEXT")
+            conn.commit()
+            print("✓ Added review_status column to assets table")
+    except sqlite3.OperationalError as e:
+        # Table may not exist yet or DB may not be initialized by indexer.
+        print(f"Database schema check skipped: {e}")
+    except Exception as e:
+        print(f"Error ensuring review_status column: {e}")
 
 def format_size(size_bytes):
     """Format bytes to human readable format"""
@@ -85,12 +103,65 @@ def format_file_type(file_type):
     # Otherwise return first part (e.g., 'image' from 'image/jpeg')
     return file_type.split('/')[0].upper()
 
+
+def normalize_tags(tags):
+    """Normalize tags into a comma-separated list string."""
+    if tags is None:
+        return ''
+
+    tags_list = []
+    if isinstance(tags, (list, tuple, set)):
+        tags_list = list(tags)
+    else:
+        raw = str(tags).strip()
+        if raw.startswith('[') and raw.endswith(']'):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    tags_list = parsed
+                else:
+                    tags_list = [raw]
+            except Exception:
+                tags_list = [t.strip() for t in raw.replace(';', ',').split(',') if t.strip()]
+        else:
+            tags_list = [t.strip() for t in raw.replace(';', ',').split(',') if t.strip()]
+
+    normalized = []
+    for tag in tags_list:
+        if tag is None:
+            continue
+        tag = str(tag).strip()
+        if not tag:
+            continue
+        tag = tag.lower()
+        if tag not in normalized:
+            normalized.append(tag)
+
+    return ','.join(normalized)
+
+
+def normalize_status(status):
+    """Normalize review status values."""
+    if status is None:
+        return ''
+    if isinstance(status, str):
+        status_value = status.strip().lower()
+    else:
+        status_value = str(status).strip().lower()
+
+    if status_value in ['approved', 'rejected', 'favorite']:
+        return status_value
+    return ''
+
+
 @app.route('/')
 def index():
     """Home page with search"""
     query = request.args.get('q', '')
     project = request.args.get('project', '')
     file_type = request.args.get('type', '')
+    used_status = request.args.get('used', '')
+    review_status = request.args.get('status', '')
     show_all = request.args.get('all', '').lower() == 'true'
     page = request.args.get('page', default=1, type=int)
     page = max(1, page)  # Ensure page is at least 1
@@ -122,6 +193,17 @@ def index():
         else:
             sql += " AND file_type LIKE ?"
             params.append(f"{file_type}%")
+
+    if used_status == 'used':
+        sql += " AND used = 1"
+    elif used_status == 'unused':
+        sql += " AND (used = 0 OR used IS NULL)"
+
+    if review_status in ['approved', 'rejected', 'favorite']:
+        sql += " AND review_status = ?"
+        params.append(review_status)
+    elif review_status == 'none':
+        sql += " AND (review_status IS NULL OR review_status = '')"
     
     sql += " ORDER BY indexed_date DESC"
     
@@ -145,6 +227,7 @@ def index():
             dvc_hash,
             thumbnail_path,
             tags,
+            review_status,
             created_date,
             indexed_date,
             git_commit,
@@ -152,7 +235,8 @@ def index():
             bundle_path,
             bundle_files,
             archived,
-            archive_source
+            archive_source,
+            used
         FROM (
             {sql}
         )
@@ -214,6 +298,8 @@ def index():
                          query=query,
                          selected_project=project,
                          selected_type=file_type,
+                         selected_used=used_status,
+                         selected_status=review_status,
                          format_file_type=format_file_type,
                          page=page,
                          total_pages=total_pages,
@@ -348,11 +434,15 @@ def asset_detail(asset_id):
     return_to = request.args.get('return_to', '/')
 
     db = get_db()
-    asset = db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    asset_row = db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
     
-    if not asset:
+    if not asset_row:
         db.close()
         return "Asset not found", 404
+
+    asset = dict(asset_row)
+    asset['tags'] = normalize_tags(asset.get('tags'))
+    asset['review_status'] = normalize_status(asset.get('review_status'))
     
     # Get version history from git
     versions = []
@@ -382,6 +472,49 @@ def asset_detail(asset_id):
                          return_to=return_to,
                          format_size=format_size,
                          format_file_type=format_file_type)
+
+
+@app.route('/api/assets/<int:asset_id>/tags', methods=['POST'])
+def update_asset_tags(asset_id):
+    """Update tags for an asset and preserve them across index updates."""
+    try:
+        tags_value = ''
+        if request.is_json:
+            tags_value = request.json.get('tags', '')
+        else:
+            tags_value = request.form.get('tags', '')
+
+        normalized_tags = normalize_tags(tags_value)
+        db = get_db()
+        db.execute('UPDATE assets SET tags = ? WHERE id = ?', (normalized_tags, asset_id))
+        db.commit()
+        db.close()
+
+        return jsonify({'success': True, 'tags': normalized_tags})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/assets/<int:asset_id>/status', methods=['POST'])
+def update_asset_status(asset_id):
+    """Update the review status for an asset."""
+    try:
+        status_value = ''
+        if request.is_json:
+            status_value = request.json.get('status', '')
+        else:
+            status_value = request.form.get('status', '')
+
+        normalized = normalize_status(status_value)
+        db = get_db()
+        db.execute('UPDATE assets SET review_status = ? WHERE id = ?', (normalized, asset_id))
+        db.commit()
+        db.close()
+
+        return jsonify({'success': True, 'review_status': normalized})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/assets/<int:asset_id>/versions')
 def api_asset_versions(asset_id):

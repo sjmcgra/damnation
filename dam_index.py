@@ -78,6 +78,7 @@ class DAMIndexer:
                 created_date TEXT,
                 indexed_date TEXT,
                 git_commit TEXT,
+                review_status TEXT,
                 is_bundle INTEGER DEFAULT 0,
                 bundle_path TEXT,
                 bundle_files INTEGER,
@@ -90,11 +91,13 @@ class DAMIndexer:
         existing_columns = {col[1] for col in c.fetchall()}
         
         columns_to_add = {
+            'review_status': 'TEXT',
             'is_bundle': 'INTEGER DEFAULT 0',
             'bundle_path': 'TEXT',
             'bundle_files': 'INTEGER',
             'archived': 'INTEGER DEFAULT 0',
-            'archive_source': 'TEXT'
+            'archive_source': 'TEXT',
+            'used': 'INTEGER DEFAULT 0'
         }
         
         for col_name, col_type in columns_to_add.items():
@@ -251,7 +254,7 @@ class DAMIndexer:
             metadata['thumbnail_path'] = thumb_path
         
         tags = self.auto_tag(project, relative_path, full_path.name)
-        metadata['tags'] = json.dumps(tags)
+        metadata['tags'] = self.normalize_tags(tags)
         
         self.store_asset(metadata)
         print(f"  • {relative_path}")
@@ -353,14 +356,40 @@ class DAMIndexer:
         except Exception:
             return None
 
+    def normalize_tags(self, tags):
+        """Normalize tags into a sorted comma-separated string."""
+        if tags is None:
+            return ''
+
+        normalized = []
+        if isinstance(tags, (list, tuple, set)):
+            raw_tags = tags
+        else:
+            raw_tags = [str(tags)]
+
+        for raw in raw_tags:
+            if raw is None:
+                continue
+            if isinstance(raw, str):
+                for tag in raw.replace(';', ',').split(','):
+                    tag = tag.strip()
+                    if tag and tag.lower() not in normalized:
+                        normalized.append(tag.lower())
+            else:
+                tag = str(raw).strip()
+                if tag and tag.lower() not in normalized:
+                    normalized.append(tag.lower())
+
+        return ','.join(normalized)
+
     def auto_tag(self, project, path, filename):
         """
         Automatically generate tags from path and filename
         Later can be enhanced with AI vision API
         """
-        tags = set()
+        tags = []
 
-        tags.add(project)
+        tags.append(project)
 
         path_parts = Path(path).parts
         for part in path_parts:
@@ -372,13 +401,13 @@ class DAMIndexer:
                 "3d_models",
                 "motion",
             ]:
-                tags.add(part.lower())
+                tags.append(part.lower())
 
         name_parts = filename.lower().replace("_", " ").replace("-", " ").split()
         for part in name_parts:
-                tags.add(part)
+            tags.append(part)
 
-        return list(tags)
+        return tags
 
     def store_asset(self, metadata):
         """Store asset metadata in database.
@@ -398,31 +427,30 @@ class DAMIndexer:
             INSERT OR IGNORE INTO assets
             (project, filepath, filename, file_type, file_size, width, height,
              dvc_hash, thumbnail_path, tags, created_date, indexed_date, git_commit,
-             is_bundle, bundle_path, bundle_files, archived, archive_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            metadata['project'],
-            metadata['filepath'],
-            metadata['filename'],
-            metadata['file_type'],
-            metadata['file_size'],
-            metadata.get('width'),
-            metadata.get('height'),
-            metadata.get('dvc_hash'),
-            metadata.get('thumbnail_path'),
-            metadata['tags'],
-            metadata['created_date'],
-            metadata['indexed_date'],
-            metadata['git_commit'],
-            metadata.get('is_bundle', False),
-            metadata.get('bundle_path'),
-            metadata.get('bundle_files'),
-            metadata.get('archived', False),
-            metadata.get('archive_source')
-        ))
-
-        # Second pass: update only system-derived fields on existing rows.
-        # Deliberately excludes: tags, ai_description (human-curated).
+             review_status, is_bundle, bundle_path, bundle_files, archived, archive_source, used)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                metadata['project'],
+                metadata['filepath'],
+                metadata['filename'],
+                metadata['file_type'],
+                metadata['file_size'],
+                metadata.get('width'),
+                metadata.get('height'),
+                metadata.get('dvc_hash'),
+                metadata.get('thumbnail_path'),
+                metadata['tags'],
+                metadata['created_date'],
+                metadata['indexed_date'],
+                metadata['git_commit'],
+                metadata.get('review_status', ''),
+                metadata.get('is_bundle', False),
+                metadata.get('bundle_path'),
+                metadata.get('bundle_files'),
+                metadata.get('archived', False),
+                metadata.get('archive_source'),
+                metadata.get('used', False)
+            ))
         # Also excludes: git_commit (keeps the commit when first indexed).
         if c.rowcount == 0:
             c.execute('''
@@ -470,6 +498,28 @@ class DAMIndexer:
         conn.commit()
         conn.close()
         
+        return affected
+
+    def mark_assets_used(self, filenames, project=None):
+        """Mark assets as used in the DAM database."""
+        if not filenames:
+            return 0
+
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        placeholders = ','.join('?' for _ in filenames)
+        if project:
+            query = f'UPDATE assets SET used=1 WHERE filename IN ({placeholders}) AND project=?'
+            params = [*filenames, project]
+        else:
+            query = f'UPDATE assets SET used=1 WHERE filename IN ({placeholders})'
+            params = [*filenames]
+
+        result = c.execute(query, params)
+        affected = result.rowcount
+
+        conn.commit()
+        conn.close()
         return affected
 
 
