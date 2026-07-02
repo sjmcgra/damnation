@@ -20,6 +20,7 @@ from flask import Flask, render_template, request, send_file, jsonify
 import sqlite3
 from pathlib import Path
 import json
+import shlex
 import subprocess
 import os
 import git
@@ -516,9 +517,134 @@ def update_asset_status(asset_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/assets/<int:asset_id>/dvc-history')
+def api_asset_dvc_history(asset_id):
+    """Get DVC version history for a specific asset file.
+
+    Walks git commits on the subdir's .dvc pointer file and extracts
+    per-file hash and size from each version's directory manifest.
+    Works for any file in any DVC-tracked subdirectory.
+    """
+    db = get_db()
+    asset = db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    db.close()
+
+    if not asset:
+        return jsonify({'error': 'Asset not found'}), 404
+
+    filepath   = asset['filepath']                        # e.g. motion/return to hokai prime 360-4/file.motn
+    project    = asset['project']                         # e.g. hokai
+    filename   = Path(filepath).name                      # e.g. file.motn
+    # DVC tracks at the TOP-LEVEL asset subdir only (e.g. assets/motion.dvc)
+    # so we need just the first path component, not the full parent path.
+    top_subdir = Path(filepath).parts[0]                  # e.g. motion
+    rel_path   = str(Path(*Path(filepath).parts[1:]))     # e.g. return to hokai prime 360-4/file.motn
+    dvc_ref    = f"assets/{top_subdir}.dvc"               # git path to the .dvc pointer file
+
+    try:
+        repo_path = PROJECTS_ROOT / project
+        if not repo_path.exists():
+            return jsonify({'error': f'Project not found: {project}'}), 404
+
+        repo      = git.Repo(repo_path)
+        cache_dir = repo_path / '.dvc' / 'cache' / 'files' / 'md5'
+
+        history = []
+
+        for commit in repo.iter_commits(paths=dvc_ref):
+            try:
+                # Read the .dvc file content at this commit
+                dvc_content = (commit.tree / 'assets' / f'{top_subdir}.dvc').data_stream.read()
+                import yaml
+                dvc_data    = yaml.safe_load(dvc_content)
+                dir_md5     = dvc_data['outs'][0]['md5']  # e.g. abc123.dir
+
+                # The directory manifest is cached at .dvc/cache/files/md5/ab/c123.dir
+                manifest_path = cache_dir / dir_md5[:2] / dir_md5[2:]
+                file_size     = None
+                file_md5      = None
+
+                if manifest_path.exists():
+                    manifest = json.loads(manifest_path.read_text())
+                    for entry in manifest:
+                        # relpath in the manifest is relative to the tracked subdir
+                        # e.g. "return to hokai prime 360-4/file.motn"
+                        if entry.get('relpath') == rel_path or entry.get('relpath') == filename:
+                            file_md5  = entry['md5']
+                            file_cache = cache_dir / file_md5[:2] / file_md5[2:]
+                            if file_cache.exists():
+                                file_size = file_cache.stat().st_size
+                            break
+
+                # Only include versions where this specific file existed
+                if file_md5 is not None:
+                    history.append({
+                        'commit':       commit.hexsha,
+                        'short_commit': commit.hexsha[:8],
+                        'date':         datetime.fromtimestamp(commit.committed_date).strftime('%Y-%m-%d %H:%M'),
+                        'message':      commit.message.strip(),
+                        'author':       commit.author.name,
+                        'file_md5':     file_md5,
+                        'file_size':    file_size,
+                        'dir_md5':      dir_md5,
+                        'subdir':       top_subdir,
+                        'filename':     filename,
+                        'project':      project,
+                    })
+            except Exception as e:
+                # Log the error so we can see what's failing
+                print(f"DVC history error at commit {commit.hexsha[:8]}: {type(e).__name__}: {e}")
+                continue
+
+        return jsonify({
+            'filepath': filepath,
+            'project':  project,
+            'subdir':   top_subdir,
+            'filename': filename,
+            'history':  history,
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/assets/<int:asset_id>/restore-command')
+def api_restore_command(asset_id):
+    """Generate the dam_restore.sh command for a specific version."""
+    commit = request.args.get('commit', '')
+    mode   = request.args.get('mode', 'inplace')  # inplace or copy
+
+    db   = get_db()
+    asset = db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    db.close()
+
+    if not asset:
+        return jsonify({'error': 'Asset not found'}), 404
+    if not commit:
+        return jsonify({'error': 'commit parameter required'}), 400
+
+    project  = asset['project']
+    filepath = asset['filepath']
+
+    command_parts = ['./dam_restore.sh', project, filepath, commit]
+    if mode == 'copy':
+        command_parts.append('--copy')
+
+    command = ' '.join(shlex.quote(part) for part in command_parts)
+
+    return jsonify({
+        'command':  command,
+        'project':  project,
+        'filepath': filepath,
+        'commit':   commit,
+        'mode':     mode,
+    })
+
+
 @app.route('/api/assets/<int:asset_id>/versions')
 def api_asset_versions(asset_id):
-    """API endpoint to get asset version history"""
+    """API endpoint to get asset version history (git commits, not DVC).
+    For DVC version history use /api/assets/<id>/dvc-history instead."""
     db = get_db()
     asset = db.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
     

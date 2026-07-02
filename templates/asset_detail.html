@@ -603,25 +603,47 @@
             
             <!-- Version History Section -->
             <div class="section">
-                <div class="section-title">📜 Version History ({{ versions|length }})</div>
-                {% if versions %}
-                <div class="versions-list" id="versionsList">
-                    {% for version in versions %}
-                    <div class="version-item" onclick="selectVersion('{{ version.hexsha }}', this)">
-                        <div class="version-sha">{{ version.short_sha }}</div>
-                        <div class="version-author">{{ version.author }}</div>
-                        <div class="version-date">{{ version.date }}</div>
-                        {% if version.message %}
-                        <div class="version-message">{{ version.message }}</div>
-                        {% endif %}
+                <div class="section-title">📜 DVC Version History</div>
+                <div id="versionHistoryContainer">
+                    <div style="color: #666; text-align: center; padding: 20px;">
+                        <button onclick="loadDvcHistory({{ asset.id }})" style="background: #404040;">
+                            Load Version History
+                        </button>
                     </div>
-                    {% endfor %}
                 </div>
-                {% else %}
-                <div style="color: #666; text-align: center; padding: 20px;">
-                    No version history available
+            </div>
+
+            <!-- Restore Command Modal -->
+            <div id="restoreModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:1000; align-items:center; justify-content:center;">
+                <div style="background:#2d2d2d; border:1px solid #505050; border-radius:8px; padding:30px; max-width:640px; width:90%; position:relative;">
+                    <button onclick="closeRestoreModal()" style="position:absolute; top:12px; right:12px; background:#505050; padding:4px 10px; font-size:12px; flex:none; width:auto;">✕ Close</button>
+                    <div style="font-size:16px; font-weight:600; color:#fff; margin-bottom:16px;">🔄 Restore Version</div>
+                    <div id="restoreVersionInfo" style="color:#999; font-size:13px; margin-bottom:20px;"></div>
+
+                    <div style="margin-bottom:16px;">
+                        <div style="color:#ccc; font-size:13px; margin-bottom:8px; font-weight:500;">Restore mode:</div>
+                        <div style="display:flex; gap:12px;">
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#e0e0e0; font-size:13px;">
+                                <input type="radio" name="restoreMode" value="inplace" checked> Restore in place
+                                <span style="color:#888; font-size:11px;">(backs up current file first)</span>
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#e0e0e0; font-size:13px;">
+                                <input type="radio" name="restoreMode" value="copy"> Restore as dated copy
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="color:#ccc; font-size:13px; margin-bottom:8px; font-weight:500;">Run this command from your damnation directory:</div>
+                    <div style="position:relative;">
+                        <pre id="restoreCommand" style="background:#1a1a1a; border:1px solid #404040; border-radius:4px; padding:14px; font-size:13px; color:#7edb7e; white-space:pre-wrap; word-break:break-all; margin:0;"></pre>
+                        <button onclick="copyRestoreCommand()" style="position:absolute; top:8px; right:8px; background:#404040; padding:4px 10px; font-size:11px; flex:none; width:auto;" id="copyRestoreBtn">
+                            Copy
+                        </button>
+                    </div>
+                    <div style="color:#666; font-size:11px; margin-top:12px;">
+                        After restoring, run <code style="color:#aaa;">./dam_sync.sh {{ asset.project }}</code> to re-track and re-index.
+                    </div>
                 </div>
-                {% endif %}
             </div>
         </div>
     </div>
@@ -718,17 +740,97 @@
         }
 
         function selectVersion(sha, element) {
-            // Remove previous selection
-            document.querySelectorAll('.version-item').forEach(el => {
-                el.classList.remove('selected');
-            });
-            // Add selection to clicked item
+            document.querySelectorAll('.version-item').forEach(el => el.classList.remove('selected'));
             element.classList.add('selected');
-            
-            // You could add functionality here to:
-            // 1. Show download button for this version
-            // 2. Load thumbnail preview for this version
-            // 3. Show version details in a modal
+        }
+
+        // ---------------------------------------------------------------------------
+        // DVC Version History
+        // ---------------------------------------------------------------------------
+        let currentAssetId = null;
+        let currentCommit  = null;
+
+        async function loadDvcHistory(assetId) {
+            currentAssetId = assetId;
+            const container = document.getElementById('versionHistoryContainer');
+            container.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">Loading...</div>';
+            try {
+                const res  = await fetch(`/api/assets/${assetId}/dvc-history`);
+                const data = await res.json();
+                if (data.error) {
+                    container.innerHTML = `<div style="color:#c0392b; padding:16px;">${data.error}</div>`;
+                    return;
+                }
+                if (!data.history || data.history.length === 0) {
+                    container.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">No DVC versions found.<br><span style="font-size:12px;">Run dam_sync.sh at least twice after editing to build history.</span></div>';
+                    return;
+                }
+                const rows = data.history.map((v, i) => `
+                    <div class="version-item${i === 0 ? ' selected' : ''}" onclick="selectVersion('${v.commit}', this)">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span class="version-sha">${v.short_commit}</span>
+                            ${i === 0 ? '<span style="font-size:11px; color:#7edb7e;">&#9679; current</span>' : ''}
+                        </div>
+                        <div class="version-date">${v.date}</div>
+                        <div class="version-message">${v.message.substring(0, 80)}</div>
+                        ${v.file_size ? `<div style="font-size:11px; color:#666; margin-top:4px;">${formatBytes(v.file_size)}</div>` : ''}
+                        <div style="margin-top:8px;">
+                            <button onclick="event.stopPropagation(); showRestoreModal('${v.commit}', '${v.date}', '${v.message.replace(/'/g,'').substring(0,60)}')"
+                                    style="font-size:11px; padding:4px 10px; background:#404040; flex:none; width:auto;">
+                                Get Restore Command
+                            </button>
+                        </div>
+                    </div>`).join('');
+                container.innerHTML = `<div class="versions-list">${rows}</div>`;
+            } catch (err) {
+                container.innerHTML = `<div style="color:#c0392b; padding:16px;">Error: ${err.message}</div>`;
+            }
+        }
+
+        function showRestoreModal(commit, date, message) {
+            currentCommit = commit;
+            document.getElementById('restoreVersionInfo').textContent =
+                `Version: ${commit.substring(0,8)}  \u00b7  ${date}  \u00b7  ${message}`;
+            updateRestoreCommand();
+            document.getElementById('restoreModal').style.display = 'flex';
+        }
+
+        function closeRestoreModal() {
+            document.getElementById('restoreModal').style.display = 'none';
+        }
+
+        function updateRestoreCommand() {
+            if (!currentCommit || !currentAssetId) return;
+            const mode = document.querySelector('input[name="restoreMode"]:checked').value;
+            fetch(`/api/assets/${currentAssetId}/restore-command?commit=${currentCommit}&mode=${mode}`)
+                .then(r => r.json())
+                .then(data => { document.getElementById('restoreCommand').textContent = data.command; });
+        }
+
+        document.addEventListener('change', e => {
+            if (e.target.name === 'restoreMode') updateRestoreCommand();
+        });
+
+        document.getElementById('restoreModal').addEventListener('click', e => {
+            if (e.target === document.getElementById('restoreModal')) closeRestoreModal();
+        });
+
+        function copyRestoreCommand() {
+            navigator.clipboard.writeText(document.getElementById('restoreCommand').textContent);
+            const btn = document.getElementById('copyRestoreBtn');
+            btn.textContent = '\u2713 Copied';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes) return '';
+            const units = ['B','KB','MB','GB'];
+            let b = bytes;
+            for (const u of units) {
+                if (b < 1024) return `${b.toFixed(1)} ${u}`;
+                b /= 1024;
+            }
+            return `${b.toFixed(1)} TB`;
         }
     </script>
 </body>
