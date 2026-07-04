@@ -662,7 +662,7 @@
     {% if results %}
     <div class="grid">
         {% for asset in results %}
-        <a href="/asset/{{ asset.id }}?return_to={{ request.url | urlencode }}" class="card">
+        <div class="card asset-card" data-asset-detail-url="/asset/{{ asset.id }}?return_to={{ request.url | urlencode }}" tabindex="0" role="link">
             <div class="card-image">
                 {% if asset.thumbnail_path %}
                 <img src="/thumbnail/{{ asset.thumbnail_path }}" alt="{{ asset.filename }}">
@@ -697,7 +697,7 @@
                         <option value="rejected" {% if asset.review_status == 'rejected' %}selected{% endif %}>Rejected</option>
                         <option value="favorite" {% if asset.review_status == 'favorite' %}selected{% endif %}>Favorite</option>
                     </select>
-                    <button class="btn-small secondary" type="button" onclick="saveReviewStatus(event, {{ asset.id }}, this)">Save</button>
+                    <button class="btn-small secondary" type="button" data-asset-id="{{ asset.id }}">Save</button>
                 </div>
                 
                 <div class="card-meta">
@@ -759,7 +759,7 @@
                     </button>
                 </div>
             </div>
-        </a>
+        </div>
         {% endfor %}
     </div>
     
@@ -790,6 +790,47 @@
     {% endif %}
 </body>
 <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('.asset-card').forEach((card) => {
+            card.addEventListener('click', (event) => {
+                const interactiveTarget = event.target && event.target.closest('select, button, a, input, textarea, .version-badge');
+                if (interactiveTarget) {
+                    return;
+                }
+
+                const detailUrl = card.getAttribute('data-asset-detail-url');
+                if (detailUrl) {
+                    window.location.href = detailUrl;
+                }
+            });
+
+            card.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+
+                const interactiveTarget = event.target && event.target.closest('select, button, a, input, textarea, .version-badge');
+                if (interactiveTarget) {
+                    return;
+                }
+
+                event.preventDefault();
+                const detailUrl = card.getAttribute('data-asset-detail-url');
+                if (detailUrl) {
+                    window.location.href = detailUrl;
+                }
+            });
+        });
+
+        document.querySelectorAll('.review-status-inline button[data-asset-id]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                saveReviewStatus(event, button.getAttribute('data-asset-id'), button);
+            });
+        });
+    });
+
     function copyPath(filepath) {
         navigator.clipboard.writeText(filepath).then(() => {
             alert('Path copied: ' + filepath);

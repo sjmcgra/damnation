@@ -103,6 +103,14 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
             finally:
                 dam_app.DB_PATH = original_db_path
 
+    def test_index_template_prevents_review_status_select_from_triggering_card_navigation(self):
+        template_path = Path(__file__).resolve().parents[1] / "templates" / "index.html"
+        template_source = template_path.read_text()
+
+        self.assertIn('class="card asset-card"', template_source)
+        self.assertIn("document.addEventListener('DOMContentLoaded'", template_source)
+        self.assertIn("button.addEventListener('click'", template_source)
+
     def test_dvc_history_endpoint_includes_subdir_for_matching_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "assets.db"
