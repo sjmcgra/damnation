@@ -133,6 +133,28 @@ echo
 echo "📝 Committing DVC pointer files to Git..."
 
 git add -A
+
+# Safety check: refuse to commit raw media that DVC isn't tracking.
+# Catches cases where .gitignore is missing/misconfigured for a directory
+# (e.g. master/) that should never be committed directly to git.
+LARGE_STAGED=$(git diff --cached --name-only --diff-filter=A | while read -r f; do
+  [ -f "$f" ] || continue
+  size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+  if [ "$size" -gt 52428800 ]; then
+    echo "$f ($((size / 1048576)) MB)"
+  fi
+done)
+
+if [ -n "$LARGE_STAGED" ]; then
+  echo "  ✗ Refusing to commit: staged files over 50MB detected:"
+  echo "$LARGE_STAGED" | sed 's/^/      /'
+  echo "    This usually means a directory (like master/) is missing"
+  echo "    from .gitignore and got picked up by 'git add -A'."
+  echo "    Run: git status --ignored   to inspect, then fix .gitignore."
+  git restore --staged .
+  exit 1
+fi
+
 if git diff --cached --quiet; then
   echo "  ✓ Nothing new to commit"
 else
