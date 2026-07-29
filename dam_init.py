@@ -90,6 +90,11 @@ assets/*/
 # Final Cut Pro -- cache and media can be enormous, never commit
 final_cut/
 
+# Master exports -- versioned by filename (new version = new file),
+# vaulted to the S3 masters bucket + local backup. Not tracked by
+# git or DVC -- never commit these directly.
+master/
+
 # DVC internal cache (local only)
 .dvc/cache/
 .dvc/tmp/
