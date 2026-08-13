@@ -88,6 +88,8 @@ def format_file_type(file_type):
         'image/png': 'Image',
         'image/jpeg': 'Image',
         'image/webp': 'Image',
+        'image/vnd.adobe.photoshop': 'Photoshop',
+        'image/x-photoshop': 'Photoshop',
         'video/mp4': 'Video',
         'video/quicktime': 'Video',
         'video/x-msvideo': 'Video',
@@ -155,6 +157,28 @@ def normalize_status(status):
     return ''
 
 
+def resolve_asset_path(project, filepath):
+    """Return the actual file path on disk and the relative path if the asset was moved."""
+    project_assets_root = PROJECTS_ROOT / project / 'assets'
+    exact_path = project_assets_root / filepath
+    if exact_path.exists():
+        return exact_path, filepath
+
+    if project_assets_root.exists():
+        filename = Path(filepath).name
+        for candidate in project_assets_root.rglob(filename):
+            if candidate.is_file():
+                return candidate, str(candidate.relative_to(project_assets_root))
+
+    return exact_path, None
+
+
+def is_asset_missing(project, filepath):
+    """True when the file is absent and cannot be resolved to a moved copy."""
+    _, resolved_path = resolve_asset_path(project, filepath)
+    return resolved_path is None
+
+
 @app.route('/')
 def index():
     """Home page with search"""
@@ -191,6 +215,9 @@ def index():
             # Special case for GarageBand files (.band)
             sql += " AND file_type = ?"
             params.append('application/x-garageband')
+        elif file_type == 'photoshop':
+            sql += " AND file_type IN (?, ?, ?)"
+            params.extend(['image/vnd.adobe.photoshop', 'image/x-photoshop', 'application/photoshop'])
         else:
             sql += " AND file_type LIKE ?"
             params.append(f"{file_type}%")
@@ -281,6 +308,12 @@ def index():
         asset_dict = dict(asset)
         asset_dict['versions'] = versions
         asset_dict['version_count'] = len(versions)
+
+        asset_path, resolved_relative = resolve_asset_path(asset['project'], asset['filepath'])
+        asset_dict['resolved_path'] = resolved_relative
+        asset_dict['missing'] = not asset_path.exists()
+        asset_dict['moved'] = bool(resolved_relative and resolved_relative != asset['filepath'])
+
         results_with_versions.append(asset_dict)
     
     # Calculate pagination info
@@ -323,10 +356,9 @@ def download(project, filepath):
     """Download file from local filesystem or S3 via DVC"""
     try:
         # Try local filesystem first (faster for production assets)
-        file_path = PROJECTS_ROOT / project / "assets" / filepath
-        
+        file_path, resolved_relative = resolve_asset_path(project, filepath)
         if file_path.exists():
-            filename = Path(filepath).name
+            filename = Path(resolved_relative or filepath).name
             return send_file(str(file_path), 
                            as_attachment=True, 
                            download_name=filename)
@@ -372,7 +404,7 @@ def view_file(project, filepath):
         import tempfile
         
         # Try to get from local projects first
-        file_path = PROJECTS_ROOT / project / "assets" / filepath
+        file_path, resolved_relative = resolve_asset_path(project, filepath)
         
         if file_path.exists():
             # Get MIME type

@@ -103,6 +103,33 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
             finally:
                 dam_app.DB_PATH = original_db_path
 
+    def test_format_file_type_maps_photoshop_files(self):
+        self.assertEqual(dam_app.format_file_type("image/vnd.adobe.photoshop"), "Photoshop")
+
+    def test_create_thumbnail_falls_back_for_photoshop_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            db_path = tmp_path / "assets.db"
+            projects_root = tmp_path / "projects"
+            projects_root.mkdir(parents=True, exist_ok=True)
+
+            indexer = DAMIndexer(db_path=db_path, projects_root=projects_root)
+            indexer.thumbnail_dir = tmp_path / "thumbnails"
+            indexer.thumbnail_dir.mkdir(parents=True, exist_ok=True)
+            source_path = tmp_path / "sample.psd"
+            source_path.write_bytes(b"fake psd")
+
+            def fake_run(command, capture_output=None, text=None, **kwargs):
+                output_path = Path(command[-1])
+                output_path.write_bytes(b"thumb")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("dam_index.Image.open", side_effect=Exception("unsupported")), patch("dam_index.subprocess.run", side_effect=fake_run):
+                thumb = indexer.create_thumbnail(source_path, "demo", Path("assets/sample.psd"))
+
+            self.assertIsNotNone(thumb)
+            self.assertTrue((tmp_path / "thumbnails" / "demo").exists())
+
     def test_index_template_prevents_review_status_select_from_triggering_card_navigation(self):
         template_path = Path(__file__).resolve().parents[1] / "templates" / "index.html"
         template_source = template_path.read_text()
@@ -110,6 +137,32 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
         self.assertIn('class="card asset-card"', template_source)
         self.assertIn("document.addEventListener('DOMContentLoaded'", template_source)
         self.assertIn("button.addEventListener('click'", template_source)
+
+    def test_index_template_includes_inline_media_preview_controls(self):
+        template_path = Path(__file__).resolve().parents[1] / "templates" / "index.html"
+        template_source = template_path.read_text()
+
+        self.assertIn("preview-modal", template_source)
+        self.assertIn("data-preview-url", template_source)
+        self.assertIn("Preview", template_source)
+
+    def test_asset_missing_and_moved_file_resolution(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_root = Path(tmpdir) / "projects"
+            project_assets = projects_root / "demo" / "assets"
+            moved_path = project_assets / "archive" / "original.psd"
+            moved_path.parent.mkdir(parents=True, exist_ok=True)
+            moved_path.write_bytes(b"psd")
+
+            original_db_path = dam_app.PROJECTS_ROOT
+            dam_app.PROJECTS_ROOT = projects_root
+            try:
+                resolved_path, resolved_rel = dam_app.resolve_asset_path("demo", "images/original.psd")
+                self.assertEqual(resolved_path, moved_path)
+                self.assertEqual(resolved_rel, "archive/original.psd")
+                self.assertFalse(dam_app.is_asset_missing("demo", "images/original.psd"))
+            finally:
+                dam_app.PROJECTS_ROOT = original_db_path
 
     def test_dvc_history_endpoint_includes_subdir_for_matching_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

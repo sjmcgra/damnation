@@ -198,6 +198,7 @@
             margin-top: 12px;
             padding-top: 12px;
             border-top: 1px solid #404040;
+            flex-wrap: wrap;
         }
         
         .btn-small {
@@ -225,6 +226,15 @@
         
         .btn-small:active {
             transform: scale(0.96);
+        }
+
+        .preview-button {
+            background: #2f6f3e;
+            color: #e8f8eb;
+        }
+
+        .preview-button:hover {
+            background: #3d8f4f;
         }
         
         .btn-download {
@@ -345,6 +355,67 @@
             text-align: center;
             padding: 60px 20px;
             color: #666;
+        }
+
+        .preview-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.82);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .preview-modal.open {
+            display: flex;
+        }
+
+        .preview-modal-content {
+            position: relative;
+            width: min(900px, 100%);
+            max-height: 90vh;
+            background: #1f1f1f;
+            border: 1px solid #404040;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .preview-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            border: none;
+            border-radius: 999px;
+            width: 36px;
+            height: 36px;
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 2;
+        }
+
+        .preview-player {
+            width: 100%;
+            max-height: 90vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            padding: 20px;
+        }
+
+        .preview-player video,
+        .preview-player audio {
+            width: 100%;
+            max-height: 80vh;
+        }
+
+        .preview-player video {
+            object-fit: contain;
         }
         
         .type-badge {
@@ -627,6 +698,7 @@
                     <option value="model" {% if selected_type == 'model' %}selected{% endif %}>3D Models</option>
                     <option value="motion" {% if selected_type == 'motion' %}selected{% endif %}>Motion</option>
                     <option value="garageband" {% if selected_type == 'garageband' %}selected{% endif %}>GarageBand</option>
+                    <option value="photoshop" {% if selected_type == 'photoshop' %}selected{% endif %}>Photoshop</option>
                 </select>
 
                 <select name="used" onchange="this.form.submit()">
@@ -702,7 +774,22 @@
                 
                 <div class="card-meta">
                     <span class="type-badge">{{ format_file_type(asset.file_type) }}</span>
+                    {% if asset.missing %}
+                    <span style="display:inline-block; margin-left:6px; padding:2px 6px; background:#5a2a2a; color:#ffd6d6; border-radius:3px; font-size:10px;">Missing</span>
+                    {% elif asset.moved %}
+                    <span style="display:inline-block; margin-left:6px; padding:2px 6px; background:#3c4d2f; color:#dfeecb; border-radius:3px; font-size:10px;">Moved</span>
+                    {% endif %}
                 </div>
+
+                {% if asset.moved and asset.resolved_path %}
+                <div class="card-meta" title="Moved from {{ asset.filepath }} to {{ asset.resolved_path }}" style="color:#d6f0ff;">
+                    ↳ {{ asset.resolved_path }}
+                </div>
+                {% elif asset.missing %}
+                <div class="card-meta" style="color:#ffd6d6;">
+                    File not found at expected path
+                </div>
+                {% endif %}
                 
                 <div class="card-meta">
                     {{ asset.project }}
@@ -743,6 +830,13 @@
                 {% endif %}
                 
                 <div class="card-actions">
+                    {% if asset.file_type and (asset.file_type.startswith('video/') or asset.file_type.startswith('audio/')) %}
+                    <button class="btn-small preview-button" type="button"
+                            data-preview-url="/view/{{ asset.project }}/{{ asset.filepath }}"
+                            data-preview-type="{{ asset.file_type }}">
+                        ▶ Preview
+                    </button>
+                    {% endif %}
                     {% if asset.is_bundle %}
                     <a href="/download-bundle/{{ asset.project }}/{{ asset.bundle_path }}" 
                        class="btn-small btn-download">
@@ -788,6 +882,13 @@
         <p>Try a different search term or clear your filters</p>
     </div>
     {% endif %}
+
+    <div id="preview-modal" class="preview-modal" aria-hidden="true">
+        <div class="preview-modal-content">
+            <button class="preview-close" type="button" aria-label="Close preview" onclick="closePreview()">×</button>
+            <div id="preview-player" class="preview-player"></div>
+        </div>
+    </div>
 </body>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -829,6 +930,26 @@
                 saveReviewStatus(event, button.getAttribute('data-asset-id'), button);
             });
         });
+
+        document.querySelectorAll('.preview-button').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openPreview(button.getAttribute('data-preview-url'), button.getAttribute('data-preview-type'));
+            });
+        });
+
+        document.getElementById('preview-modal')?.addEventListener('click', (event) => {
+            if (event.target.id === 'preview-modal') {
+                closePreview();
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closePreview();
+            }
+        });
     });
 
     function copyPath(filepath) {
@@ -847,6 +968,36 @@
                 '📜 Version history (' + (container.querySelectorAll('.version-item').length) + ') - click to collapse' :
                 '📜 Version history (' + (container.querySelectorAll('.version-item').length) + ')';
         }
+    }
+
+    function openPreview(url, type) {
+        const modal = document.getElementById('preview-modal');
+        const player = document.getElementById('preview-player');
+        if (!modal || !player) {
+            return;
+        }
+
+        const isAudio = type && type.startsWith('audio/');
+        if (isAudio) {
+            player.innerHTML = `<audio controls autoplay><source src="${url}" type="${type}"></audio>`;
+        } else {
+            player.innerHTML = `<video controls autoplay playsinline><source src="${url}" type="${type || 'video/mp4'}"></video>`;
+        }
+
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+
+    function closePreview() {
+        const modal = document.getElementById('preview-modal');
+        const player = document.getElementById('preview-player');
+        if (!modal || !player) {
+            return;
+        }
+
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+        player.innerHTML = '';
     }
 
     async function saveReviewStatus(event, assetId, button) {

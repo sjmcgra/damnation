@@ -296,6 +296,7 @@ class DAMIndexer:
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
             ".webp": "image/webp",
+            ".psd": "image/vnd.adobe.photoshop",
             ".mp4": "video/mp4",
             ".mov": "video/quicktime",
             ".avi": "video/x-msvideo",
@@ -344,6 +345,26 @@ class DAMIndexer:
 
             return str(thumb_path.relative_to(self.thumbnail_dir.parent))
         except Exception as e:
+            if source_path.suffix.lower() == '.psd':
+                try:
+                    thumb_dir = self.thumbnail_dir / project
+                    thumb_dir.mkdir(exist_ok=True)
+                    path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+                    thumb_path = thumb_dir / f"{path_hash}_{source_path.stem}.jpg"
+                    result = subprocess.run([
+                        'convert',
+                        str(source_path),
+                        '-thumbnail', f'{size[0]}x{size[1]}^',
+                        '-gravity', 'center',
+                        '-extent', f'{size[0]}x{size[1]}',
+                        str(thumb_path)
+                    ], capture_output=True, text=True)
+                    if result.returncode == 0 and thumb_path.exists():
+                        return str(thumb_path.relative_to(self.thumbnail_dir.parent))
+                    print(f"    Warning: Could not create PSD thumbnail via ImageMagick: {result.stderr.strip()}")
+                except Exception as fallback_error:
+                    print(f"    Warning: Could not create PSD thumbnail via ImageMagick: {fallback_error}")
+
             print(f"    Warning: Could not create thumbnail: {e}")
             return None
 
