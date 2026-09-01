@@ -24,6 +24,8 @@ import shlex
 import subprocess
 import os
 import git
+import zipfile
+import tempfile
 from datetime import datetime
 
 from config import DB_PATH, THUMBNAIL_DIR, PROJECTS_ROOT, get_repo_url, GIT_SSH_COMMAND, FLASK_ENV, GIT_BRANCH
@@ -42,6 +44,7 @@ def get_db():
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         ensure_review_status_column(conn)
+        ensure_preview_path_column(conn)
         return conn
     except Exception as e:
         print(f"Database connection error: {e}")
@@ -63,6 +66,22 @@ def ensure_review_status_column(conn):
         print(f"Database schema check skipped: {e}")
     except Exception as e:
         print(f"Error ensuring review_status column: {e}")
+
+
+def ensure_preview_path_column(conn):
+    """Ensure the preview_path column exists in the assets table."""
+    try:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(assets)")
+        existing_columns = {row[1] for row in c.fetchall()}
+        if 'preview_path' not in existing_columns:
+            c.execute("ALTER TABLE assets ADD COLUMN preview_path TEXT")
+            conn.commit()
+            print("✓ Added preview_path column to assets table")
+    except sqlite3.OperationalError as e:
+        print(f"Database schema check skipped: {e}")
+    except Exception as e:
+        print(f"Error ensuring preview_path column: {e}")
 
 def format_size(size_bytes):
     """Format bytes to human readable format"""
@@ -173,6 +192,31 @@ def resolve_asset_path(project, filepath):
     return exact_path, None
 
 
+def resolve_preview_path(project, filepath, preview_path=None):
+    """Return the browser-preview file path when a generated MP4 preview exists."""
+    if preview_path:
+        full_path = THUMBNAIL_DIR.parent / preview_path
+        if full_path.exists():
+            return full_path
+
+    if project and filepath:
+        preview_dir = THUMBNAIL_DIR / project / 'previews'
+        if preview_dir.exists():
+            import hashlib
+            path_hash = hashlib.md5(str(filepath).encode()).hexdigest()[:8]
+            stem = Path(filepath).stem
+            candidates = [
+                preview_dir / f"{path_hash}_{stem}.mp4",
+                preview_dir / f"{path_hash}_{Path(filepath).name}.mp4",
+                preview_dir / f"{stem}.mp4",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+
+    return None
+
+
 def is_asset_missing(project, filepath):
     """True when the file is absent and cannot be resolved to a moved copy."""
     _, resolved_path = resolve_asset_path(project, filepath)
@@ -254,6 +298,7 @@ def index():
             height,
             dvc_hash,
             thumbnail_path,
+            preview_path,
             tags,
             review_status,
             created_date,
@@ -402,44 +447,55 @@ def view_file(project, filepath):
     try:
         import mimetypes
         import tempfile
-        
+
+        db = get_db()
+        try:
+            asset = db.execute(
+                "SELECT * FROM assets WHERE project = ? AND filepath = ? ORDER BY id DESC LIMIT 1",
+                (project, filepath),
+            ).fetchone()
+        finally:
+            db.close()
+
+        preview_path = None
+        if asset is not None:
+            preview_path = asset['preview_path']
+
+        resolved_preview = resolve_preview_path(project, filepath, preview_path)
+        if resolved_preview:
+            return send_file(str(resolved_preview), mimetype='video/mp4')
+
         # Try to get from local projects first
         file_path, resolved_relative = resolve_asset_path(project, filepath)
         
         if file_path.exists():
-            # Get MIME type
             mime_type, _ = mimetypes.guess_type(str(file_path))
             if mime_type is None:
                 mime_type = 'application/octet-stream'
-            
-            # Determine if it's viewable in browser
+
             viewable_types = ['image/', 'video/', 'audio/']
             is_viewable = any(mime_type.startswith(vt) for vt in viewable_types)
-            
+
             if is_viewable:
+                if mime_type.startswith('video/') and mime_type != 'video/mp4':
+                    return send_file(str(file_path), mimetype='video/mp4')
                 return send_file(str(file_path), mimetype=mime_type)
-            else:
-                return f"File type not viewable in browser: {mime_type}", 400
+            return f"File type not viewable in browser: {mime_type}", 400
         
         # Fallback: retrieve from DVC/S3 for archived assets
         try:
-            # Get MIME type
             mime_type, _ = mimetypes.guess_type(filepath)
             if mime_type is None:
                 mime_type = 'application/octet-stream'
-            
-            # Determine if it's viewable
+
             viewable_types = ['image/', 'video/', 'audio/']
             is_viewable = any(mime_type.startswith(vt) for vt in viewable_types)
-            
             if not is_viewable:
                 return f"File type not viewable in browser: {mime_type}", 400
-            
-            # Create temporary file for DVC output
+
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 tmp_path = tmp.name
-            
-            # Use dvc get to retrieve from remote (S3)
+
             repo_url = get_repo_url(project)
             env = os.environ.copy()
             env["GIT_SSH_COMMAND"] = GIT_SSH_COMMAND
@@ -448,15 +504,16 @@ def view_file(project, filepath):
                 repo_url,
                 filepath
             ], capture_output=True, text=True, env=env)
-            
+
             if result.returncode == 0 and Path(tmp_path).exists():
+                if mime_type.startswith('video/') and mime_type != 'video/mp4':
+                    return send_file(tmp_path, mimetype='video/mp4')
                 return send_file(tmp_path, mimetype=mime_type)
-            else:
-                return f"File not found in S3: {result.stderr}", 404
-                
+            return f"File not found in S3: {result.stderr}", 404
+
         except Exception as dvc_err:
             return f"File not found locally or in S3: {str(dvc_err)}", 404
-            
+
     except Exception as e:
         return f"Error: {str(e)}", 500
 
@@ -545,6 +602,116 @@ def update_asset_status(asset_id):
         db.close()
 
         return jsonify({'success': True, 'review_status': normalized})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/assets/bulk-edit', methods=['POST'])
+def bulk_edit_assets():
+    """Update tags and/or review status for several assets at once."""
+    data = request.get_json(silent=True) or {}
+    asset_ids = data.get('asset_ids', [])
+    if not isinstance(asset_ids, list) or not asset_ids:
+        return jsonify({'success': False, 'error': 'asset_ids must be a non-empty list'}), 400
+
+    updates = []
+    if 'tags' in data:
+        tags_value = normalize_tags(data['tags'])
+        if data.get('append_tags', True):
+            db = get_db()
+            placeholders = ','.join('?' for _ in asset_ids)
+            existing_tags = db.execute(
+                f'SELECT id, tags FROM assets WHERE id IN ({placeholders})', asset_ids
+            ).fetchall()
+            db.close()
+            existing_by_id = {row['id']: row['tags'] for row in existing_tags}
+            updates.append(('tags_by_id', (tags_value, existing_by_id)))
+        else:
+            updates.append(('tags', tags_value))
+    if 'status' in data:
+        updates.append(('review_status', normalize_status(data['status'])))
+    if not updates:
+        return jsonify({'success': False, 'error': 'Provide tags or status'}), 400
+
+    try:
+        normalized_ids = [int(asset_id) for asset_id in asset_ids]
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'asset_ids must contain integers'}), 400
+
+    try:
+        db = get_db()
+        placeholders = ','.join('?' for _ in normalized_ids)
+        existing = db.execute(
+            f'SELECT id FROM assets WHERE id IN ({placeholders})', normalized_ids
+        ).fetchall()
+        existing_ids = {row['id'] for row in existing}
+        if existing_ids != set(normalized_ids):
+            db.close()
+            return jsonify({'success': False, 'error': 'One or more assets were not found'}), 404
+
+        for column, value in updates:
+            if column == 'tags_by_id':
+                incoming_tags, existing_by_id = value
+                for asset_id in normalized_ids:
+                    combined_tags = normalize_tags(
+                        [existing_by_id.get(asset_id, ''), incoming_tags]
+                    )
+                    db.execute('UPDATE assets SET tags = ? WHERE id = ?', (combined_tags, asset_id))
+            else:
+                db.execute(
+                    f'UPDATE assets SET {column} = ? WHERE id IN ({placeholders})',
+                    [value, *normalized_ids]
+                )
+        db.commit()
+        db.close()
+        return jsonify({'success': True, 'updated': len(normalized_ids)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/assets/bulk-download', methods=['POST'])
+def bulk_download_assets():
+    """Download several locally available assets as a ZIP archive."""
+    data = request.get_json(silent=True) or {}
+    asset_ids = data.get('asset_ids', [])
+    if not isinstance(asset_ids, list) or not asset_ids:
+        return jsonify({'success': False, 'error': 'asset_ids must be a non-empty list'}), 400
+
+    try:
+        normalized_ids = [int(asset_id) for asset_id in asset_ids]
+        db = get_db()
+        placeholders = ','.join('?' for _ in normalized_ids)
+        assets = db.execute(
+            f'SELECT id, project, filepath FROM assets WHERE id IN ({placeholders})', normalized_ids
+        ).fetchall()
+        db.close()
+        if len(assets) != len(set(normalized_ids)):
+            return jsonify({'success': False, 'error': 'One or more assets were not found'}), 404
+
+        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+        missing = []
+        used_names = set()
+        with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for asset in assets:
+                file_path, resolved_relative = resolve_asset_path(asset['project'], asset['filepath'])
+                if not file_path.is_file():
+                    missing.append(asset['filepath'])
+                    continue
+                archive_name = f"{asset['project']}/{resolved_relative or asset['filepath']}"
+                if archive_name in used_names:
+                    continue
+                used_names.add(archive_name)
+                archive.write(file_path, archive_name)
+
+        if not used_names:
+            os.unlink(temp_zip.name)
+            return jsonify({'success': False, 'error': 'None of the selected assets are available locally', 'missing': missing}), 404
+
+        response = send_file(temp_zip.name, as_attachment=True, download_name='dam-assets.zip')
+        response.headers['X-DAM-Missing-Assets'] = str(len(missing))
+        return response
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'asset_ids must contain integers'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

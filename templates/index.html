@@ -103,11 +103,58 @@
             gap: 20px;
             padding: 20px;
         }
+
+        .bulk-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 12px 20px;
+            background: #202020;
+            border-bottom: 1px solid #404040;
+        }
+
+        .bulk-toolbar input[type="text"], .bulk-toolbar select {
+            min-width: 160px;
+            flex: 0 1 auto;
+        }
+
+        .bulk-toolbar button {
+            min-height: 38px;
+            padding: 8px 14px;
+        }
+
+        .bulk-count {
+            color: #d4d4d4;
+            font-size: 13px;
+            margin-right: auto;
+        }
+
+        .asset-select {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 22px;
+            height: 22px;
+            z-index: 2;
+            accent-color: #0066cc;
+        }
+
+        .asset-select:checked {
+            outline: 2px solid #ffffff;
+            outline-offset: 1px;
+        }
+
+        .asset-card.selected {
+            border-color: #2f8cff;
+            box-shadow: 0 0 0 2px rgba(47, 140, 255, 0.3);
+        }
         
         .card {
             background: #2d2d2d;
             border-radius: 8px;
             overflow: hidden;
+            position: relative;
             transition: all 0.2s;
             border: 1px solid #404040;
             cursor: pointer;
@@ -732,9 +779,25 @@
     </div>
     
     {% if results %}
+    <div class="bulk-toolbar" role="toolbar" aria-label="Bulk asset actions">
+        <label><input id="select-all-assets" type="checkbox"> Select all on page</label>
+        <span id="bulk-count" class="bulk-count">0 selected</span>
+        <select id="bulk-status" aria-label="Set review status">
+            <option value="">Leave status unchanged</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="favorite">Favorite</option>
+            <option value="none">Clear status</option>
+        </select>
+        <input id="bulk-tags" type="text" placeholder="Tags to append..." aria-label="Tags to append">
+        <label><input id="bulk-append-tags" type="checkbox" checked> Append tags</label>
+        <button id="bulk-edit-button" type="button">Save edits</button>
+        <button id="bulk-download-button" type="button" class="btn-download">Download selected</button>
+    </div>
     <div class="grid">
         {% for asset in results %}
         <div class="card asset-card" data-asset-detail-url="/asset/{{ asset.id }}?return_to={{ request.url | urlencode }}" tabindex="0" role="link">
+            <input class="asset-select" type="checkbox" value="{{ asset.id }}" aria-label="Select {{ asset.filename }}">
             <div class="card-image">
                 {% if asset.thumbnail_path %}
                 <img src="/thumbnail/{{ asset.thumbnail_path }}" alt="{{ asset.filename }}">
@@ -833,7 +896,7 @@
                     {% if asset.file_type and (asset.file_type.startswith('video/') or asset.file_type.startswith('audio/')) %}
                     <button class="btn-small preview-button" type="button"
                             data-preview-url="/view/{{ asset.project }}/{{ asset.filepath }}"
-                            data-preview-type="{{ asset.file_type }}">
+                            data-preview-type="{{ 'video/mp4' if asset.file_type.startswith('video/') else asset.file_type }}">
                         ▶ Preview
                     </button>
                     {% endif %}
@@ -892,6 +955,7 @@
 </body>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
+        restoreBulkSelection();
         document.querySelectorAll('.asset-card').forEach((card) => {
             card.addEventListener('click', (event) => {
                 const interactiveTarget = event.target && event.target.closest('select, button, a, input, textarea, .version-badge');
@@ -939,6 +1003,18 @@
             });
         });
 
+        document.querySelectorAll('.asset-select').forEach((checkbox) => {
+            checkbox.addEventListener('change', updateBulkSelection);
+        });
+        document.getElementById('select-all-assets')?.addEventListener('change', (event) => {
+            document.querySelectorAll('.asset-select').forEach((checkbox) => {
+                checkbox.checked = event.target.checked;
+            });
+            updateBulkSelection();
+        });
+        document.getElementById('bulk-edit-button')?.addEventListener('click', bulkEditAssets);
+        document.getElementById('bulk-download-button')?.addEventListener('click', bulkDownloadAssets);
+
         document.getElementById('preview-modal')?.addEventListener('click', (event) => {
             if (event.target.id === 'preview-modal') {
                 closePreview();
@@ -951,6 +1027,108 @@
             }
         });
     });
+
+    function selectedAssetIds() {
+        return Array.from(document.querySelectorAll('.asset-select:checked')).map((checkbox) => Number(checkbox.value));
+    }
+
+    function updateBulkSelection() {
+        const checkboxes = Array.from(document.querySelectorAll('.asset-select'));
+        const selected = selectedAssetIds();
+        saveBulkSelection(selected);
+        document.getElementById('bulk-count').textContent = `${selected.length} selected`;
+        checkboxes.forEach((checkbox) => checkbox.closest('.asset-card')?.classList.toggle('selected', checkbox.checked));
+        const selectAll = document.getElementById('select-all-assets');
+        if (selectAll) {
+            selectAll.checked = checkboxes.length > 0 && selected.length === checkboxes.length;
+            selectAll.indeterminate = selected.length > 0 && selected.length < checkboxes.length;
+        }
+    }
+
+    async function bulkEditAssets() {
+        const assetIds = selectedAssetIds();
+        const status = document.getElementById('bulk-status').value;
+        const tags = document.getElementById('bulk-tags').value;
+        if (!assetIds.length || (!status && !tags.trim())) {
+            alert('Select assets and choose a status or enter replacement tags.');
+            return;
+        }
+
+        const payload = { asset_ids: assetIds };
+        if (status) payload.status = status;
+        if (tags.trim()) {
+            payload.tags = tags;
+            payload.append_tags = document.getElementById('bulk-append-tags').checked;
+        }
+        const button = document.getElementById('bulk-edit-button');
+        button.disabled = true;
+        try {
+            const response = await fetch('/api/assets/bulk-edit', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) throw new Error(result.error || 'Bulk edit failed');
+            window.location.reload();
+        } catch (error) {
+            alert(error.message);
+            button.disabled = false;
+        }
+    }
+
+    function bulkSelectionStorageKey() {
+        return `dam-selected-assets:${window.location.pathname}${window.location.search}`;
+    }
+
+    function saveBulkSelection(assetIds) {
+        localStorage.setItem(bulkSelectionStorageKey(), JSON.stringify(assetIds));
+    }
+
+    function restoreBulkSelection() {
+        let savedIds = [];
+        try {
+            savedIds = JSON.parse(localStorage.getItem(bulkSelectionStorageKey()) || '[]');
+        } catch (error) {
+            localStorage.removeItem(bulkSelectionStorageKey());
+        }
+        const savedIdSet = new Set(savedIds);
+        document.querySelectorAll('.asset-select').forEach((checkbox) => {
+            checkbox.checked = savedIdSet.has(Number(checkbox.value));
+        });
+        updateBulkSelection();
+    }
+
+    async function bulkDownloadAssets() {
+        const assetIds = selectedAssetIds();
+        if (!assetIds.length) {
+            alert('Select at least one asset to download.');
+            return;
+        }
+
+        const button = document.getElementById('bulk-download-button');
+        button.disabled = true;
+        try {
+            const response = await fetch('/api/assets/bulk-download', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({asset_ids: assetIds})
+            });
+            if (!response.ok) {
+                const result = await response.json();
+                throw new Error(result.error || 'Bulk download failed');
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'dam-assets.zip';
+            link.click();
+            URL.revokeObjectURL(url);
+            const missing = Number(response.headers.get('X-DAM-Missing-Assets') || 0);
+            if (missing) alert(`${missing} selected asset(s) were unavailable locally and were skipped.`);
+        } catch (error) {
+            alert(error.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
 
     function copyPath(filepath) {
         navigator.clipboard.writeText(filepath).then(() => {

@@ -73,6 +73,7 @@ class DAMIndexer:
                 duration REAL,
                 dvc_hash TEXT,
                 thumbnail_path TEXT,
+                preview_path TEXT,
                 tags TEXT,
                 ai_description TEXT,
                 created_date TEXT,
@@ -95,6 +96,7 @@ class DAMIndexer:
             'is_bundle': 'INTEGER DEFAULT 0',
             'bundle_path': 'TEXT',
             'bundle_files': 'INTEGER',
+            'preview_path': 'TEXT',
             'archived': 'INTEGER DEFAULT 0',
             'archive_source': 'TEXT',
             'used': 'INTEGER DEFAULT 0'
@@ -252,6 +254,9 @@ class DAMIndexer:
         elif file_type.startswith('video'):
             thumb_path = self.create_video_thumbnail(full_path, project, relative_path)
             metadata['thumbnail_path'] = thumb_path
+            if full_path.suffix.lower() != '.mp4':
+                preview_path = self.create_video_preview(full_path, project, relative_path)
+                metadata['preview_path'] = preview_path
         
         tags = self.auto_tag(project, relative_path, full_path.name)
         metadata['tags'] = self.normalize_tags(tags)
@@ -286,6 +291,45 @@ class DAMIndexer:
 
         except Exception as e:
             print(f"    Warning: Could not create video thumbnail: {e}")
+            return None
+
+    def create_video_preview(self, source_path, project, relative_path):
+        """Generate a browser-playable MP4 preview for non-MP4 video sources."""
+        try:
+            if source_path.suffix.lower() == '.mp4':
+                return None
+
+            preview_dir = self.thumbnail_dir / project / 'previews'
+            preview_dir.mkdir(parents=True, exist_ok=True)
+
+            path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+            preview_path = preview_dir / f"{path_hash}_{source_path.stem}.mp4"
+
+            if preview_path.exists():
+                return str(preview_path.relative_to(self.thumbnail_dir.parent))
+
+            for candidate in preview_dir.glob('*.mp4'):
+                if candidate.stem == source_path.stem or candidate.stem.endswith(f'_{source_path.stem}'):
+                    return str(candidate.relative_to(self.thumbnail_dir.parent))
+
+            result = subprocess.run([
+                'ffmpeg',
+                '-i', str(source_path),
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-movflags', '+faststart',
+                '-y',
+                str(preview_path)
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0 and preview_path.exists():
+                return str(preview_path.relative_to(self.thumbnail_dir.parent))
+
+            print(f"    Warning: Could not create video preview for {source_path}: {result.stderr.strip()}")
+            return None
+        except Exception as e:
+            print(f"    Warning: Could not create video preview: {e}")
             return None
 
     def get_file_type(self, path):
@@ -447,9 +491,9 @@ class DAMIndexer:
         c.execute('''
             INSERT OR IGNORE INTO assets
             (project, filepath, filename, file_type, file_size, width, height,
-             dvc_hash, thumbnail_path, tags, created_date, indexed_date, git_commit,
+             dvc_hash, thumbnail_path, preview_path, tags, created_date, indexed_date, git_commit,
              review_status, is_bundle, bundle_path, bundle_files, archived, archive_source, used)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 metadata['project'],
                 metadata['filepath'],
@@ -460,6 +504,7 @@ class DAMIndexer:
                 metadata.get('height'),
                 metadata.get('dvc_hash'),
                 metadata.get('thumbnail_path'),
+                metadata.get('preview_path'),
                 metadata['tags'],
                 metadata['created_date'],
                 metadata['indexed_date'],
@@ -483,6 +528,7 @@ class DAMIndexer:
                     height        = ?,
                     dvc_hash      = ?,
                     thumbnail_path = ?,
+                    preview_path  = ?,
                     indexed_date  = ?,
                     is_bundle     = ?,
                     bundle_path   = ?,
@@ -496,6 +542,7 @@ class DAMIndexer:
                 metadata.get('height'),
                 metadata.get('dvc_hash'),
                 metadata.get('thumbnail_path'),
+                metadata.get('preview_path'),
                 metadata['indexed_date'],
                 metadata.get('is_bundle', False),
                 metadata.get('bundle_path'),

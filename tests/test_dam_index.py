@@ -77,6 +77,68 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
                 dam_app.DB_PATH = original_db_path
                 dam_app.THUMBNAIL_DIR = original_thumbnail_dir
 
+    def test_bulk_edit_assets_updates_tags_and_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "assets.db"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("CREATE TABLE assets (id INTEGER PRIMARY KEY, tags TEXT, review_status TEXT)")
+                conn.executemany("INSERT INTO assets (id, tags, review_status) VALUES (?, ?, ?)", [(1, "old", ""), (2, "existing", "")])
+                conn.commit()
+            finally:
+                conn.close()
+
+            original_db_path = dam_app.DB_PATH
+            dam_app.DB_PATH = db_path
+            try:
+                response = dam_app.app.test_client().post(
+                    '/api/assets/bulk-edit',
+                    json={'asset_ids': [1, 2], 'tags': 'New, tags', 'status': 'approved'},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.get_json()['success'])
+
+                conn = sqlite3.connect(db_path)
+                try:
+                    rows = conn.execute("SELECT tags, review_status FROM assets ORDER BY id").fetchall()
+                    self.assertEqual(rows, [("old,new,tags", "approved"), ("existing,new,tags", "approved")])
+                finally:
+                    conn.close()
+            finally:
+                dam_app.DB_PATH = original_db_path
+
+    def test_bulk_download_assets_returns_zip_and_missing_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "assets.db"
+            file_path = root / "projects" / "demo" / "assets" / "images" / "one.jpg"
+            file_path.parent.mkdir(parents=True)
+            file_path.write_bytes(b"image")
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("CREATE TABLE assets (id INTEGER PRIMARY KEY, project TEXT, filepath TEXT)")
+                conn.executemany("INSERT INTO assets (id, project, filepath) VALUES (?, ?, ?)", [(1, "demo", "images/one.jpg"), (2, "demo", "missing.jpg")])
+                conn.commit()
+            finally:
+                conn.close()
+
+            original_db_path = dam_app.DB_PATH
+            original_projects_root = dam_app.PROJECTS_ROOT
+            dam_app.DB_PATH = db_path
+            dam_app.PROJECTS_ROOT = root / "projects"
+            try:
+                response = dam_app.app.test_client().post('/api/assets/bulk-download', json={'asset_ids': [1, 2]})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers['X-DAM-Missing-Assets'], '1')
+                with tempfile.NamedTemporaryFile(suffix='.zip') as archive_file:
+                    Path(archive_file.name).write_bytes(response.data)
+                    import zipfile
+                    with zipfile.ZipFile(archive_file.name) as archive:
+                        self.assertEqual(archive.namelist(), ['demo/images/one.jpg'])
+            finally:
+                dam_app.DB_PATH = original_db_path
+                dam_app.PROJECTS_ROOT = original_projects_root
+
     def test_restore_command_endpoint_quotes_paths_with_spaces(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "assets.db"
@@ -129,6 +191,100 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
 
             self.assertIsNotNone(thumb)
             self.assertTrue((tmp_path / "thumbnails" / "demo").exists())
+
+    def test_create_video_preview_generates_browser_compatible_mp4(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            db_path = tmp_path / "assets.db"
+            projects_root = tmp_path / "projects"
+            projects_root.mkdir(parents=True, exist_ok=True)
+
+            indexer = DAMIndexer(db_path=db_path, projects_root=projects_root)
+            indexer.thumbnail_dir = tmp_path / "thumbnails"
+            indexer.thumbnail_dir.mkdir(parents=True, exist_ok=True)
+            source_path = tmp_path / "source.mov"
+            source_path.write_bytes(b"fake mov")
+
+            def fake_run(command, capture_output=None, text=None, **kwargs):
+                output_path = Path(command[-1])
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(b"preview-video")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("dam_index.subprocess.run", side_effect=fake_run):
+                preview = indexer.create_video_preview(source_path, "demo", Path("assets/source.mov"))
+
+            self.assertIsNotNone(preview)
+            self.assertTrue((tmp_path / "thumbnails" / "demo" / "previews").exists())
+            self.assertTrue((tmp_path / "thumbnails" / "demo" / "previews" / Path(preview).name).exists())
+
+    def test_create_video_preview_skips_existing_preview(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            db_path = tmp_path / "assets.db"
+            projects_root = tmp_path / "projects"
+            projects_root.mkdir(parents=True, exist_ok=True)
+
+            indexer = DAMIndexer(db_path=db_path, projects_root=projects_root)
+            indexer.thumbnail_dir = tmp_path / "thumbnails"
+            indexer.thumbnail_dir.mkdir(parents=True, exist_ok=True)
+            source_path = tmp_path / "source.mov"
+            source_path.write_bytes(b"fake mov")
+
+            relative_path = Path("assets/source.mov")
+            path_hash = __import__("hashlib").md5(str(relative_path).encode()).hexdigest()[:8]
+            preview_dir = indexer.thumbnail_dir / "demo" / "previews"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            expected_path = preview_dir / f"{path_hash}_source.mp4"
+            expected_path.write_bytes(b"already-transcoded")
+
+            with patch("dam_index.subprocess.run") as fake_run:
+                preview = indexer.create_video_preview(source_path, "demo", relative_path)
+
+            self.assertIsNotNone(preview)
+            fake_run.assert_not_called()
+            self.assertTrue(expected_path.exists())
+
+    def test_view_file_prefers_preview_for_quicktime_assets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            projects_root = root / "projects"
+            project_dir = projects_root / "demo" / "assets"
+            project_dir.mkdir(parents=True, exist_ok=True)
+            source_path = project_dir / "clip.mov"
+            source_path.write_bytes(b"prores-mov")
+
+            preview_dir = root / "thumbnails" / "demo" / "previews"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            preview_path = preview_dir / "preview.mp4"
+            preview_path.write_bytes(b"converted-preview")
+
+            original_db_path = dam_app.DB_PATH
+            original_projects_root = dam_app.PROJECTS_ROOT
+            original_thumbnail_dir = dam_app.THUMBNAIL_DIR
+            dam_app.DB_PATH = root / "assets.db"
+            dam_app.PROJECTS_ROOT = projects_root
+            dam_app.THUMBNAIL_DIR = root / "thumbnails"
+            try:
+                db = dam_app.get_db()
+                try:
+                    db.execute("CREATE TABLE assets (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT, filepath TEXT, preview_path TEXT)")
+                    db.execute(
+                        "INSERT INTO assets (project, filepath, preview_path) VALUES (?, ?, ?)",
+                        ("demo", "assets/clip.mov", "thumbnails/demo/previews/preview.mp4"),
+                    )
+                    db.commit()
+                finally:
+                    db.close()
+
+                response = dam_app.app.test_client().get('/view/demo/assets/clip.mov')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.mimetype, 'video/mp4')
+                self.assertEqual(response.data, b'converted-preview')
+            finally:
+                dam_app.DB_PATH = original_db_path
+                dam_app.PROJECTS_ROOT = original_projects_root
+                dam_app.THUMBNAIL_DIR = original_thumbnail_dir
 
     def test_index_template_prevents_review_status_select_from_triggering_card_navigation(self):
         template_path = Path(__file__).resolve().parents[1] / "templates" / "index.html"
