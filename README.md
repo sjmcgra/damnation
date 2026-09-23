@@ -104,6 +104,19 @@ AWS_SECRET_ACCESS_KEY=your-b2-applicationKey
 
 For Backblaze, create the bucket manually in the [Backblaze console](https://www.backblaze.com) first -- bucket creation via the S3-compatible API is not supported by B2. The endpoint URL region must match your bucket's region.
 
+### Uploading image references
+
+Image assets can be uploaded from their detail page with the **Upload Character Reference** control. Configure the defaults in `.env`:
+
+```bash
+S3_UPLOAD_BUCKET=your-character-reference-bucket
+S3_UPLOAD_PUBLIC_URL=https://your-character-reference-bucket.s3.amazonaws.com
+S3_UPLOAD_KEY_PREFIX=character-references
+# S3_UPLOAD_ENDPOINT_URL=https://s3.us-west-004.backblazeb2.com
+```
+
+The UI can override the bucket and public URL for an individual upload. AWS credentials continue to come from the usual environment variables or mounted `~/.aws` credentials. The uploaded key is `<prefix>/<project>/<asset path>`.
+
 Then init your project normally:
 ```bash
 python dam_init.py my_project --provider backblaze

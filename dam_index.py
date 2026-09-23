@@ -154,8 +154,8 @@ class DAMIndexer:
             # Handle .band packages (directories treated as bundles)
             if file_path.is_dir() and file_path.suffix == '.band':
                 relative_path = file_path.relative_to(project_path)
-                self.index_file(project_name, relative_path, file_path, git_commit)
-                file_count += 1
+                if self.index_file(project_name, relative_path, file_path, git_commit):
+                    file_count += 1
                 continue
             
             # Skip files inside .band packages
@@ -165,8 +165,8 @@ class DAMIndexer:
             # Handle .motn files
             if file_path.is_file() and file_path.suffix == '.motn':
                 relative_path = file_path.relative_to(project_path)
-                self.index_file(project_name, relative_path, file_path, git_commit)
-                file_count += 1
+                if self.index_file(project_name, relative_path, file_path, git_commit):
+                    file_count += 1
                 continue
             
             # Skip Media directory that's next to .motn files
@@ -179,14 +179,19 @@ class DAMIndexer:
             # Process regular files (not inside bundles)
             if file_path.is_file() and not file_path.name.startswith("."):
                 relative_path = file_path.relative_to(project_path)
-                self.index_file(project_name, relative_path, file_path, git_commit)
-                file_count += 1
+                if self.index_file(project_name, relative_path, file_path, git_commit):
+                    file_count += 1
 
         print(f"✓ Indexed {file_count} files from {asset_dir}")
 
     def index_file(self, project, relative_path, full_path, git_commit):
         """Index a single file"""
         stat = full_path.stat()
+        created_date = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+        if not self.asset_needs_indexing(project, relative_path, stat.st_size, created_date):
+            return False
+
         file_type = self.get_file_type(full_path)
         
         metadata = {
@@ -195,7 +200,7 @@ class DAMIndexer:
             'filename': full_path.name,
             'file_type': file_type,
             'file_size': stat.st_size,
-            'created_date': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            'created_date': created_date,
             'indexed_date': datetime.now().isoformat(),
             'git_commit': git_commit
         }
@@ -263,6 +268,20 @@ class DAMIndexer:
         
         self.store_asset(metadata)
         print(f"  • {relative_path}")
+        return True
+
+    def asset_needs_indexing(self, project, relative_path, file_size, modified_date):
+        """Return whether a file is new or its on-disk metadata changed."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT file_size, created_date FROM assets WHERE project=? AND filepath=?",
+                (project, str(relative_path)),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        return row is None or row[0] != file_size or row[1] != modified_date
 
     def create_video_thumbnail(self, source_path, project, relative_path, size=(400, 400)):
         """Generate thumbnail from video file"""
@@ -526,6 +545,7 @@ class DAMIndexer:
                     file_size     = ?,
                     width         = ?,
                     height        = ?,
+                    created_date  = ?,
                     dvc_hash      = ?,
                     thumbnail_path = ?,
                     preview_path  = ?,
@@ -540,6 +560,7 @@ class DAMIndexer:
                 metadata['file_size'],
                 metadata.get('width'),
                 metadata.get('height'),
+                metadata['created_date'],
                 metadata.get('dvc_hash'),
                 metadata.get('thumbnail_path'),
                 metadata.get('preview_path'),

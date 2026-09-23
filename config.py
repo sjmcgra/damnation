@@ -38,6 +38,10 @@ DVC_REPO_URL_TEMPLATE = os.getenv("DVC_REPO_URL_TEMPLATE", "https://github.com/{
 GIT_BRANCH = os.getenv("GIT_BRANCH", "main")
 GIT_SSH_COMMAND = os.getenv("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=no")
 AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+S3_UPLOAD_BUCKET = os.getenv("S3_UPLOAD_BUCKET", os.getenv("DVC_S3_BUCKET", ""))
+S3_UPLOAD_PUBLIC_URL = os.getenv("S3_UPLOAD_PUBLIC_URL", "")
+S3_UPLOAD_ENDPOINT_URL = os.getenv("S3_UPLOAD_ENDPOINT_URL", os.getenv("B2_ENDPOINT_URL", ""))
+S3_UPLOAD_KEY_PREFIX = os.getenv("S3_UPLOAD_KEY_PREFIX", "character-references")
 WEB_PORT = os.getenv("WEB_PORT", "5500")
 RESULTS_CACHE = DB_PATH.parent / "last_search.json"
 

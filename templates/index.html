@@ -756,9 +756,9 @@
 
                 <select name="status" onchange="this.form.submit()">
                     <option value="" {% if selected_status == '' %}selected{% endif %}>All Review Status</option>
-                    <option value="approved" {% if selected_status == 'approved' %}selected{% endif %}>Approved</option>
-                    <option value="favorite" {% if selected_status == 'favorite' %}selected{% endif %}>Favorite</option>
-                    <option value="rejected" {% if selected_status == 'rejected' %}selected{% endif %}>Rejected</option>
+                    {% for status in review_statuses %}
+                    <option value="{{ status.name }}" {% if selected_status == status.name %}selected{% endif %}>{{ status.name.capitalize() }}</option>
+                    {% endfor %}
                     <option value="none" {% if selected_status == 'none' %}selected{% endif %}>No Status</option>
                 </select>
             </div>
@@ -768,12 +768,13 @@
     <div class="stats">
         <div>Showing <strong>{{ results|length }}</strong> of <strong>{{ total_count }}</strong> assets{% if query %} for "<strong>{{ query }}</strong>"{% endif %}{% if not show_all %} (Page {{ page }}/{{ total_pages }}){% endif %}</div>
         <div class="status-key">
-            <span class="review-status-badge approved">Approved</span>
-            <span class="review-status-badge favorite">Favorite</span>
-            <span class="review-status-badge rejected">Rejected</span>
+            {% for status in review_statuses %}
+            <span class="review-status-badge {{ status.name }}">{{ status.name.capitalize() }}</span>
+            {% endfor %}
             <span class="review-status-badge">No Status</span>
         </div>
         <div>
+            <button type="button" class="btn-small secondary" onclick="manageReviewStatuses()">Manage statuses</button>
             {% if not show_all %}<a href="?q={{ query }}&project={{ selected_project }}&type={{ selected_type }}&used={{ selected_used }}&status={{ selected_status }}&all=true">Show All</a> | {% endif %}<a href="/stats">📊 Statistics</a>
         </div>
     </div>
@@ -784,9 +785,9 @@
         <span id="bulk-count" class="bulk-count">0 selected</span>
         <select id="bulk-status" aria-label="Set review status">
             <option value="">Leave status unchanged</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="favorite">Favorite</option>
+            {% for status in review_statuses %}
+            <option value="{{ status.name }}">{{ status.name.capitalize() }}</option>
+            {% endfor %}
             <option value="none">Clear status</option>
         </select>
         <input id="bulk-tags" type="text" placeholder="Tags to append..." aria-label="Tags to append">
@@ -828,9 +829,9 @@
                 <div class="review-status-inline">
                     <select id="review-status-select-{{ asset.id }}" aria-label="Review status">
                         <option value="" {% if not asset.review_status %}selected{% endif %}>None</option>
-                        <option value="approved" {% if asset.review_status == 'approved' %}selected{% endif %}>Approved</option>
-                        <option value="rejected" {% if asset.review_status == 'rejected' %}selected{% endif %}>Rejected</option>
-                        <option value="favorite" {% if asset.review_status == 'favorite' %}selected{% endif %}>Favorite</option>
+                        {% for status in review_statuses %}
+                        <option value="{{ status.name }}" {% if asset.review_status == status.name %}selected{% endif %}>{{ status.name.capitalize() }}</option>
+                        {% endfor %}
                     </select>
                     <button class="btn-small secondary" type="button" data-asset-id="{{ asset.id }}">Save</button>
                 </div>
@@ -1199,7 +1200,7 @@
                 const badge = document.getElementById(`review-status-badge-${assetId}`);
                 if (badge) {
                     if (result.review_status) {
-                        badge.className = `review-status-badge ${result.review_status}`;
+                        badge.className = 'review-status-badge';
                         badge.textContent = result.review_status.charAt(0).toUpperCase() + result.review_status.slice(1);
                     } else {
                         badge.className = 'review-status-badge';
@@ -1220,6 +1221,34 @@
                 button.disabled = false;
             }, 1500);
         }
+
+    }
+
+    async function manageReviewStatuses() {
+        const name = prompt('Enter a status to add, or prefix an existing custom status with - to remove:');
+        if (name === null || !name.trim()) return;
+        const trimmedName = name.trim();
+        if (trimmedName.startsWith('-')) {
+            const statusToRemove = trimmedName.slice(1).trim();
+            if (!statusToRemove || !confirm(`Remove status "${statusToRemove}"? Assigned assets will be cleared.`)) return;
+            const response = await fetch(`/api/review-statuses/${encodeURIComponent(statusToRemove)}`, {method: 'DELETE'});
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                alert(result.error || 'Could not remove review status');
+                return;
+            }
+            window.location.reload();
+            return;
+        }
+        const response = await fetch('/api/review-statuses', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: trimmedName})
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            alert(result.error || 'Could not add review status');
+            return;
+        }
+        window.location.reload();
     }
 </script>
 </html>
