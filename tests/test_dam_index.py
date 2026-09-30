@@ -13,6 +13,63 @@ import app as dam_app
 
 
 class DAMIndexerStoreAssetTest(unittest.TestCase):
+    def test_startup_migrates_legacy_database_and_preserves_assets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "assets.db"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """CREATE TABLE assets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        project TEXT NOT NULL,
+                        filepath TEXT NOT NULL,
+                        filename TEXT NOT NULL,
+                        file_type TEXT,
+                        file_size INTEGER,
+                        width INTEGER,
+                        height INTEGER,
+                        duration REAL,
+                        dvc_hash TEXT,
+                        thumbnail_path TEXT,
+                        tags TEXT,
+                        ai_description TEXT,
+                        created_date TEXT,
+                        indexed_date TEXT,
+                        git_commit TEXT,
+                        UNIQUE(project, filepath)
+                    )"""
+                )
+                conn.execute(
+                    "INSERT INTO assets (project, filepath, filename, tags) VALUES (?, ?, ?, ?)",
+                    ("demo", "images/kept.jpg", "kept.jpg", "favorite"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            with patch("dam_index.THUMBNAIL_DIR", root / "thumbnails"), \
+                    patch.object(dam_app, "DB_PATH", db_path), \
+                    patch.object(dam_app, "PROJECTS_ROOT", root / "projects"):
+                dam_app.initialize_database()
+
+            conn = sqlite3.connect(db_path)
+            try:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
+                self.assertTrue({
+                    "review_status", "is_bundle", "bundle_path", "bundle_files",
+                    "preview_path", "archived", "archive_source", "used",
+                }.issubset(columns))
+                row = conn.execute(
+                    "SELECT project, filepath, tags FROM assets WHERE id = 1"
+                ).fetchone()
+                self.assertEqual(row, ("demo", "images/kept.jpg", "favorite"))
+                self.assertIsNotNone(conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='review_statuses'"
+                ).fetchone())
+            finally:
+                conn.close()
+
     def test_upload_image_asset_to_s3(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

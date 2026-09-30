@@ -114,6 +114,16 @@ def ensure_preview_path_column(conn):
     except Exception as e:
         print(f"Error ensuring preview_path column: {e}")
 
+
+def initialize_database():
+    """Create or migrate the shared database before serving requests."""
+    from dam_index import DAMIndexer
+
+    DAMIndexer(db_path=DB_PATH, projects_root=PROJECTS_ROOT)
+    conn = get_db()
+    conn.close()
+
+
 def format_size(size_bytes):
     """Format bytes to human readable format"""
     if size_bytes is None:
@@ -1182,4 +1192,5 @@ def internal_error(error):
     return render_template('500.html'), 500
 
 if __name__ == '__main__':
+    initialize_database()
     app.run(host='0.0.0.0', port=5500, debug=True)
