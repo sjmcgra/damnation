@@ -475,7 +475,7 @@
             {% elif asset.file_type.startswith('video/') %}
             <div style="background: #252525; padding: 20px; border-radius: 4px; margin-bottom: 20px;">
                 <video width="100%" height="auto" controls style="border-radius: 4px;">
-                    <source src="/view/{{ asset.project }}/{{ asset.filepath }}" type="{{ asset.file_type }}">
+                    <source src="/view/{{ asset.project }}/{{ asset.filepath }}" type="video/mp4">
                     Your browser does not support the video tag.
                 </video>
             </div>
@@ -562,10 +562,11 @@
                         <span class="metadata-value tag-input-wrapper">
                             <select id="assetStatusInput">
                                 <option value="" {% if not asset.review_status %}selected{% endif %}>None</option>
-                                <option value="approved" {% if asset.review_status == 'approved' %}selected{% endif %}>Approved</option>
-                                <option value="rejected" {% if asset.review_status == 'rejected' %}selected{% endif %}>Rejected</option>
-                                <option value="favorite" {% if asset.review_status == 'favorite' %}selected{% endif %}>Favorite</option>
+                                {% for status in review_statuses %}
+                                <option value="{{ status.name }}" {% if asset.review_status == status.name %}selected{% endif %}>{{ status.name.capitalize() }}</option>
+                                {% endfor %}
                             </select>
+                            <button class="btn-small secondary" type="button" onclick="manageReviewStatuses()">Manage</button>
                             <button class="btn-small secondary" type="button" onclick="saveStatus({{ asset.id }}, this)">Save</button>
                         </span>
                     </div>
@@ -600,6 +601,31 @@
                     </div>
                 </div>
             </div>
+
+            {% if asset.file_type.startswith('image/') %}
+            <div class="section">
+                <div class="section-title">Upload Character Reference</div>
+                <div style="color:#999; font-size:13px; margin-bottom:15px;">
+                    Send this image to an S3-compatible bucket for use in AI video generation.
+                </div>
+                <div class="metadata">
+                    <div class="metadata-item">
+                        <label class="metadata-label" for="s3BucketInput">Bucket</label>
+                        <input id="s3BucketInput" type="text" value="{{ s3_upload_bucket }}" placeholder="my-reference-bucket"
+                               style="width:55%; padding:8px 10px; border:1px solid #505050; border-radius:4px; background:#1a1a1a; color:#e0e0e0;">
+                    </div>
+                    <div class="metadata-item">
+                        <label class="metadata-label" for="s3PublicUrlInput">Public URL base</label>
+                        <input id="s3PublicUrlInput" type="url" value="{{ s3_upload_public_url }}" placeholder="https://bucket.example.com"
+                               style="width:55%; padding:8px 10px; border:1px solid #505050; border-radius:4px; background:#1a1a1a; color:#e0e0e0;">
+                    </div>
+                </div>
+                <button id="s3UploadButton" type="button" onclick="uploadToS3({{ asset.id }})" style="margin-top:15px;">
+                    Upload Image to S3
+                </button>
+                <div id="s3UploadResult" style="display:none; margin-top:15px; font-size:13px; word-break:break-all;"></div>
+            </div>
+            {% endif %}
             
             <!-- Version History Section -->
             <div class="section">
@@ -719,7 +745,7 @@
                 if (result.success) {
                     const statusContainer = document.getElementById('statusBadge');
                     if (result.review_status) {
-                        statusContainer.innerHTML = `<span class="status-pill status-${result.review_status}">${result.review_status.charAt(0).toUpperCase() + result.review_status.slice(1)}</span>`;
+                        statusContainer.textContent = result.review_status.charAt(0).toUpperCase() + result.review_status.slice(1);
                     } else {
                         statusContainer.innerHTML = '<span style="color: #999;">None</span>';
                     }
@@ -736,6 +762,66 @@
                     button.textContent = originalText;
                     button.disabled = false;
                 }, 1500);
+            }
+        }
+
+        async function manageReviewStatuses() {
+            const name = prompt('Enter a status to add, or prefix an existing custom status with - to remove:');
+            if (name === null || !name.trim()) return;
+            const trimmedName = name.trim();
+            if (trimmedName.startsWith('-')) {
+                const statusToRemove = trimmedName.slice(1).trim();
+                if (!statusToRemove || !confirm(`Remove status "${statusToRemove}"? Assigned assets will be cleared.`)) return;
+                const response = await fetch(`/api/review-statuses/${encodeURIComponent(statusToRemove)}`, {method: 'DELETE'});
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    alert(result.error || 'Could not remove review status');
+                    return;
+                }
+                window.location.reload();
+                return;
+            }
+            const response = await fetch('/api/review-statuses', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: trimmedName})
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                alert(result.error || 'Could not add review status');
+                return;
+            }
+            window.location.reload();
+        }
+
+        async function uploadToS3(assetId) {
+            const button = document.getElementById('s3UploadButton');
+            const result = document.getElementById('s3UploadResult');
+            button.disabled = true;
+            button.textContent = 'Uploading...';
+            result.style.display = 'block';
+            result.style.color = '#999';
+            result.textContent = 'Uploading image...';
+
+            try {
+                const response = await fetch(`/api/assets/${assetId}/upload-s3`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        bucket: document.getElementById('s3BucketInput').value.trim(),
+                        public_url: document.getElementById('s3PublicUrlInput').value.trim()
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Upload failed');
+                }
+                result.style.color = '#7edb7e';
+                result.innerHTML = `Uploaded as <code>${data.key}</code><br><a href="${data.url}" target="_blank" rel="noopener" style="color:#7eb6ff;">${data.url}</a>`;
+            } catch (error) {
+                result.style.color = '#ff8585';
+                result.textContent = error.message;
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Upload Image to S3';
             }
         }
 

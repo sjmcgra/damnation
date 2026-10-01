@@ -3,5 +3,6 @@ Pillow
 PyYAML
 python-dotenv
 dvc[s3]
+boto3
 GitPython
 

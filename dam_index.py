@@ -73,6 +73,7 @@ class DAMIndexer:
                 duration REAL,
                 dvc_hash TEXT,
                 thumbnail_path TEXT,
+                preview_path TEXT,
                 tags TEXT,
                 ai_description TEXT,
                 created_date TEXT,
@@ -95,6 +96,7 @@ class DAMIndexer:
             'is_bundle': 'INTEGER DEFAULT 0',
             'bundle_path': 'TEXT',
             'bundle_files': 'INTEGER',
+            'preview_path': 'TEXT',
             'archived': 'INTEGER DEFAULT 0',
             'archive_source': 'TEXT',
             'used': 'INTEGER DEFAULT 0'
@@ -152,8 +154,8 @@ class DAMIndexer:
             # Handle .band packages (directories treated as bundles)
             if file_path.is_dir() and file_path.suffix == '.band':
                 relative_path = file_path.relative_to(project_path)
-                self.index_file(project_name, relative_path, file_path, git_commit)
-                file_count += 1
+                if self.index_file(project_name, relative_path, file_path, git_commit):
+                    file_count += 1
                 continue
             
             # Skip files inside .band packages
@@ -163,8 +165,8 @@ class DAMIndexer:
             # Handle .motn files
             if file_path.is_file() and file_path.suffix == '.motn':
                 relative_path = file_path.relative_to(project_path)
-                self.index_file(project_name, relative_path, file_path, git_commit)
-                file_count += 1
+                if self.index_file(project_name, relative_path, file_path, git_commit):
+                    file_count += 1
                 continue
             
             # Skip Media directory that's next to .motn files
@@ -177,14 +179,19 @@ class DAMIndexer:
             # Process regular files (not inside bundles)
             if file_path.is_file() and not file_path.name.startswith("."):
                 relative_path = file_path.relative_to(project_path)
-                self.index_file(project_name, relative_path, file_path, git_commit)
-                file_count += 1
+                if self.index_file(project_name, relative_path, file_path, git_commit):
+                    file_count += 1
 
         print(f"✓ Indexed {file_count} files from {asset_dir}")
 
     def index_file(self, project, relative_path, full_path, git_commit):
         """Index a single file"""
         stat = full_path.stat()
+        created_date = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+        if not self.asset_needs_indexing(project, relative_path, stat.st_size, created_date):
+            return False
+
         file_type = self.get_file_type(full_path)
         
         metadata = {
@@ -193,7 +200,7 @@ class DAMIndexer:
             'filename': full_path.name,
             'file_type': file_type,
             'file_size': stat.st_size,
-            'created_date': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            'created_date': created_date,
             'indexed_date': datetime.now().isoformat(),
             'git_commit': git_commit
         }
@@ -252,12 +259,29 @@ class DAMIndexer:
         elif file_type.startswith('video'):
             thumb_path = self.create_video_thumbnail(full_path, project, relative_path)
             metadata['thumbnail_path'] = thumb_path
+            if full_path.suffix.lower() != '.mp4':
+                preview_path = self.create_video_preview(full_path, project, relative_path)
+                metadata['preview_path'] = preview_path
         
         tags = self.auto_tag(project, relative_path, full_path.name)
         metadata['tags'] = self.normalize_tags(tags)
         
         self.store_asset(metadata)
         print(f"  • {relative_path}")
+        return True
+
+    def asset_needs_indexing(self, project, relative_path, file_size, modified_date):
+        """Return whether a file is new or its on-disk metadata changed."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT file_size, created_date FROM assets WHERE project=? AND filepath=?",
+                (project, str(relative_path)),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        return row is None or row[0] != file_size or row[1] != modified_date
 
     def create_video_thumbnail(self, source_path, project, relative_path, size=(400, 400)):
         """Generate thumbnail from video file"""
@@ -288,6 +312,45 @@ class DAMIndexer:
             print(f"    Warning: Could not create video thumbnail: {e}")
             return None
 
+    def create_video_preview(self, source_path, project, relative_path):
+        """Generate a browser-playable MP4 preview for non-MP4 video sources."""
+        try:
+            if source_path.suffix.lower() == '.mp4':
+                return None
+
+            preview_dir = self.thumbnail_dir / project / 'previews'
+            preview_dir.mkdir(parents=True, exist_ok=True)
+
+            path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+            preview_path = preview_dir / f"{path_hash}_{source_path.stem}.mp4"
+
+            if preview_path.exists():
+                return str(preview_path.relative_to(self.thumbnail_dir.parent))
+
+            for candidate in preview_dir.glob('*.mp4'):
+                if candidate.stem == source_path.stem or candidate.stem.endswith(f'_{source_path.stem}'):
+                    return str(candidate.relative_to(self.thumbnail_dir.parent))
+
+            result = subprocess.run([
+                'ffmpeg',
+                '-i', str(source_path),
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-movflags', '+faststart',
+                '-y',
+                str(preview_path)
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0 and preview_path.exists():
+                return str(preview_path.relative_to(self.thumbnail_dir.parent))
+
+            print(f"    Warning: Could not create video preview for {source_path}: {result.stderr.strip()}")
+            return None
+        except Exception as e:
+            print(f"    Warning: Could not create video preview: {e}")
+            return None
+
     def get_file_type(self, path):
         """Determine MIME type"""
         ext = path.suffix.lower()
@@ -296,6 +359,7 @@ class DAMIndexer:
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
             ".webp": "image/webp",
+            ".psd": "image/vnd.adobe.photoshop",
             ".mp4": "video/mp4",
             ".mov": "video/quicktime",
             ".avi": "video/x-msvideo",
@@ -344,6 +408,26 @@ class DAMIndexer:
 
             return str(thumb_path.relative_to(self.thumbnail_dir.parent))
         except Exception as e:
+            if source_path.suffix.lower() == '.psd':
+                try:
+                    thumb_dir = self.thumbnail_dir / project
+                    thumb_dir.mkdir(exist_ok=True)
+                    path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+                    thumb_path = thumb_dir / f"{path_hash}_{source_path.stem}.jpg"
+                    result = subprocess.run([
+                        'convert',
+                        str(source_path),
+                        '-thumbnail', f'{size[0]}x{size[1]}^',
+                        '-gravity', 'center',
+                        '-extent', f'{size[0]}x{size[1]}',
+                        str(thumb_path)
+                    ], capture_output=True, text=True)
+                    if result.returncode == 0 and thumb_path.exists():
+                        return str(thumb_path.relative_to(self.thumbnail_dir.parent))
+                    print(f"    Warning: Could not create PSD thumbnail via ImageMagick: {result.stderr.strip()}")
+                except Exception as fallback_error:
+                    print(f"    Warning: Could not create PSD thumbnail via ImageMagick: {fallback_error}")
+
             print(f"    Warning: Could not create thumbnail: {e}")
             return None
 
@@ -426,9 +510,9 @@ class DAMIndexer:
         c.execute('''
             INSERT OR IGNORE INTO assets
             (project, filepath, filename, file_type, file_size, width, height,
-             dvc_hash, thumbnail_path, tags, created_date, indexed_date, git_commit,
+             dvc_hash, thumbnail_path, preview_path, tags, created_date, indexed_date, git_commit,
              review_status, is_bundle, bundle_path, bundle_files, archived, archive_source, used)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 metadata['project'],
                 metadata['filepath'],
@@ -439,6 +523,7 @@ class DAMIndexer:
                 metadata.get('height'),
                 metadata.get('dvc_hash'),
                 metadata.get('thumbnail_path'),
+                metadata.get('preview_path'),
                 metadata['tags'],
                 metadata['created_date'],
                 metadata['indexed_date'],
@@ -460,8 +545,10 @@ class DAMIndexer:
                     file_size     = ?,
                     width         = ?,
                     height        = ?,
+                    created_date  = ?,
                     dvc_hash      = ?,
                     thumbnail_path = ?,
+                    preview_path  = ?,
                     indexed_date  = ?,
                     is_bundle     = ?,
                     bundle_path   = ?,
@@ -473,8 +560,10 @@ class DAMIndexer:
                 metadata['file_size'],
                 metadata.get('width'),
                 metadata.get('height'),
+                metadata['created_date'],
                 metadata.get('dvc_hash'),
                 metadata.get('thumbnail_path'),
+                metadata.get('preview_path'),
                 metadata['indexed_date'],
                 metadata.get('is_bundle', False),
                 metadata.get('bundle_path'),

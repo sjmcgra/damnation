@@ -125,6 +125,14 @@ def run_silent(cmd, cwd=None):
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
+def resolve_project_target(project_arg, projects_root):
+    """Return the project slug and path from a name or absolute path."""
+    supplied_path = Path(project_arg).expanduser()
+    if supplied_path.is_absolute():
+        return supplied_path.name, supplied_path
+    return project_arg, Path(projects_root).expanduser() / project_arg
+
+
 def check_prerequisites(provider="aws"):
     """Abort early if required tools are missing."""
     required = ["git", "dvc", "gh"]
@@ -244,7 +252,7 @@ def main():
         description="Initialize a new DAMnation-managed project."
     )
     parser.add_argument("project_name",
-                        help="Short project name, e.g. hokai_ep2")
+                        help="Short project name or absolute project path, e.g. hokai_ep2")
     parser.add_argument("--projects-root", default=str(PROJECTS_ROOT),
                         help=f"Root directory for all projects (default: {PROJECTS_ROOT})")
     parser.add_argument("--bucket", default=os.getenv("DVC_S3_BUCKET", ""),
@@ -281,9 +289,8 @@ def main():
         print("  Example: https://s3.us-west-004.backblazeb2.com")
         sys.exit(1)
 
-    project_name   = args.project_name
     projects_root  = Path(args.projects_root).expanduser()
-    project_path   = projects_root / project_name
+    project_name, project_path = resolve_project_target(args.project_name, projects_root)
     github_private = not args.public
     provider       = args.provider
 

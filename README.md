@@ -1,6 +1,16 @@
 # DAMnation
 
-DAMnation is a self-hosted digital asset management system for media projects tracked with Git and DVC. It provides a searchable web UI for browsing, previewing, and downloading assets, with version history pulled from Git.
+DAMnation is a self-hosted digital asset management system for media projects tracked with Git and DVC. It provides a searchable web UI for browsing, previewing, and downloading assets, with Git and DVC version history.
+
+## What's new in v26.3
+
+- Custom review statuses, favorites, and bulk tag/status editing. Tag edits are preserved when assets are re-indexed.
+- DVC version history for assets, with restore-in-place or restore-as-copy workflows.
+- PSD thumbnail support, browser previews for ProRes video, and resolution of assets moved within a project.
+- Motion and GarageBand bundle indexing and ZIP downloads.
+- FCPXML auditing that can mark timeline-used assets in DAMnation, plus archive and usage tracking.
+- Multi-project sync support and project initialization from an absolute path.
+- AWS S3 and Backblaze B2 storage support, plus uploads of image references to S3-compatible storage.
 
 ## How it works
 
@@ -82,6 +92,16 @@ docker compose up --build -d
 
 Open http://localhost:5500 (or the port set in `WEB_PORT`).
 
+### Updating an existing installation
+
+After updating the checkout to v26.3, rebuild and restart the web container:
+
+```bash
+docker compose up --build -d
+```
+
+On startup, the web app checks the shared SQLite database and adds any missing v26.3 schema columns and review-status table. This migration is idempotent and preserves existing asset records; do not delete `DB_DATA_PATH` or `assets.db` to upgrade. The host-side indexer also applies the asset-column migrations when it runs.
+
 ## Storage backends
 
 DAMnation is opinionated toward S3-compatible object storage. Both AWS S3 and Backblaze B2 are supported with no extra dependencies -- they use the same `dvc[s3]` package via B2's S3-compatible API.
@@ -103,6 +123,19 @@ AWS_SECRET_ACCESS_KEY=your-b2-applicationKey
 ```
 
 For Backblaze, create the bucket manually in the [Backblaze console](https://www.backblaze.com) first -- bucket creation via the S3-compatible API is not supported by B2. The endpoint URL region must match your bucket's region.
+
+### Uploading image references
+
+Image assets can be uploaded from their detail page with the **Upload Character Reference** control. Configure the defaults in `.env`:
+
+```bash
+S3_UPLOAD_BUCKET=your-character-reference-bucket
+S3_UPLOAD_PUBLIC_URL=https://your-character-reference-bucket.s3.amazonaws.com
+S3_UPLOAD_KEY_PREFIX=character-references
+# S3_UPLOAD_ENDPOINT_URL=https://s3.us-west-004.backblazeb2.com
+```
+
+The UI can override the bucket and public URL for an individual upload. AWS credentials continue to come from the usual environment variables or mounted `~/.aws` credentials. The uploaded key is `<prefix>/<project>/<asset path>`.
 
 Then init your project normally:
 ```bash
@@ -126,6 +159,9 @@ python dam_init.py <project_name> --adopt
 python dam_init.py hokai_ep2
 python dam_init.py hokai --adopt
 python dam_init.py hokai_ep2 --projects-root /Volumes/CYBERMAN/Projects --bucket my-dam-bucket
+
+# Initialize an existing project by absolute path
+python dam_init.py /Volumes/CYBERMAN/Projects/hokai_ep2 --adopt
 ```
 
 Use `--adopt` whenever the project directory already exists (e.g. you've been working in it before DAMnation was set up). It will leave existing files and any existing `.gitignore` untouched, add any missing asset subdirectories, and wire up git/DVC/GitHub from where things stand.
@@ -151,6 +187,12 @@ cd /path/to/damnation
 
 # Or to sync just one subdirectory:
 ./dam_sync.sh hokai_ep2 "Add sc01 hero shots" generated_images
+
+# Sync multiple projects with one shared commit message
+./dam_sync.sh hokai_ep1 hokai_ep2 -m "Add reference assets"
+
+# Sync only one subdirectory
+./dam_sync.sh hokai_ep2 -s generated_images
 ```
 
 **Tip:** Add a shell alias so you can run DAMnation scripts from anywhere without `cd`-ing first:
@@ -220,6 +262,16 @@ python dam.py get <result_number>
 
 # Direct download by project and path
 python dam_get.py <project> <filepath>
+
+# Mark a project as archived, retaining its database entries
+python dam_index.py archive <project> <archive_source>
+```
+
+Asset detail pages include Git/DVC history when available. The DVC history panel provides a restore command; run it from the DAMnation directory on the host. Add `--copy` to keep the current file and restore the historical version as a dated copy:
+
+```bash
+./dam_restore.sh hokai_ep1 generated_images/scene.png <git_commit>
+./dam_restore.sh hokai_ep1 generated_images/scene.png <git_commit> --copy
 ```
 
 ### Utilities
@@ -229,11 +281,12 @@ python dam_get.py <project> <filepath>
 python fcpxml_audit.py path/to/library.fcpxmld
 python fcpxml_audit.py path/to/Info.fcpxml --unused-only --csv report.csv
 
-Run audit with extra DAM update:
-
+# Mark clips used on a timeline in the DAM database
 python fcpxml_audit.py /path/to/Info.fcpxml --mark-used-in-dam
-Optionally restrict to a project:
+
+# Restrict the update to one project, or preview the count without changing data
 python fcpxml_audit.py /path/to/Info.fcpxml --mark-used-in-dam --dam-project hokai_ep1
+python fcpxml_audit.py /path/to/Info.fcpxml --mark-used-in-dam --dry-run
 
 # Clean up duplicate database entries
 python cleanup_duplicates.py
