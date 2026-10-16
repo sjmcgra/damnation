@@ -20,6 +20,7 @@ from flask import Flask, render_template, request, send_file, jsonify
 import sqlite3
 from pathlib import Path
 import json
+import hashlib
 import shlex
 import subprocess
 import os
@@ -122,6 +123,24 @@ def initialize_database():
     DAMIndexer(db_path=DB_PATH, projects_root=PROJECTS_ROOT)
     conn = get_db()
     conn.close()
+
+
+def resolve_preview_path(project, filepath, preview_path=None):
+    """Return only the deterministic preview associated with this asset."""
+    if not project or not filepath:
+        return None
+
+    path_hash = hashlib.md5(str(filepath).encode()).hexdigest()[:8]
+    expected_path = THUMBNAIL_DIR / project / 'previews' / f"{path_hash}_{Path(filepath).stem}.mp4"
+    if preview_path:
+        recorded_path = THUMBNAIL_DIR.parent / preview_path
+        if recorded_path == expected_path and recorded_path.is_file() and recorded_path.stat().st_size > 0:
+            return recorded_path
+
+    if expected_path.is_file() and expected_path.stat().st_size > 0:
+        return expected_path
+
+    return None
 
 
 def format_size(size_bytes):
@@ -233,31 +252,6 @@ def resolve_asset_path(project, filepath):
                 return candidate, str(candidate.relative_to(project_assets_root))
 
     return exact_path, None
-
-
-def resolve_preview_path(project, filepath, preview_path=None):
-    """Return the browser-preview file path when a generated MP4 preview exists."""
-    if preview_path:
-        full_path = THUMBNAIL_DIR.parent / preview_path
-        if full_path.exists():
-            return full_path
-
-    if project and filepath:
-        preview_dir = THUMBNAIL_DIR / project / 'previews'
-        if preview_dir.exists():
-            import hashlib
-            path_hash = hashlib.md5(str(filepath).encode()).hexdigest()[:8]
-            stem = Path(filepath).stem
-            candidates = [
-                preview_dir / f"{path_hash}_{stem}.mp4",
-                preview_dir / f"{path_hash}_{Path(filepath).name}.mp4",
-                preview_dir / f"{stem}.mp4",
-            ]
-            for candidate in candidates:
-                if candidate.exists():
-                    return candidate
-
-    return None
 
 
 def is_asset_missing(project, filepath):

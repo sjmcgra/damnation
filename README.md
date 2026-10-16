@@ -229,6 +229,9 @@ python dam_index.py index hokai_ep2 assets/
 The `project_name` is matched against subdirectories under `PROJECTS_ROOT`. The `asset_subdirectory` is relative to `<project>/assets/`.
 
 After indexing, the web UI reflects the new assets immediately — no container restart needed.
+For non-MP4 video files, indexing also creates an H.264/AAC MP4 preview for browser playback.
+These previews are stored beside the thumbnails in the shared thumbnail directory; re-index
+existing videos to generate previews for assets indexed before preview support was enabled.
 
 ## DVC workflow
 

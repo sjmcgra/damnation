@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -10,6 +11,170 @@ from unittest.mock import patch
 
 from dam_index import DAMIndexer
 import app as dam_app
+
+
+class DAMIndexerVideoPreviewTest(unittest.TestCase):
+    def test_unchanged_video_without_preview_is_reindexed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            with patch("dam_index.THUMBNAIL_DIR", tmp_path / "thumbnails"):
+                indexer = DAMIndexer(
+                    db_path=tmp_path / "assets.db",
+                    projects_root=tmp_path / "projects",
+                )
+
+            relative_path = Path("video/clip.mov")
+            modified_date = "2026-06-30T00:00:00"
+            conn = sqlite3.connect(indexer.db_path)
+            try:
+                conn.execute(
+                    "INSERT INTO assets (project, filepath, filename, file_type, file_size, created_date) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("demo", str(relative_path), "clip.mov", "video/quicktime", 123, modified_date),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            self.assertTrue(
+                indexer.asset_needs_indexing("demo", relative_path, 123, modified_date)
+            )
+
+            path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+            preview_path = indexer.thumbnail_dir / "demo" / "previews" / f"{path_hash}_clip.mp4"
+            preview_path.parent.mkdir(parents=True, exist_ok=True)
+            preview_path.write_bytes(b"preview")
+
+            self.assertTrue(
+                indexer.asset_needs_indexing("demo", relative_path, 123, modified_date)
+            )
+            conn = sqlite3.connect(indexer.db_path)
+            try:
+                conn.execute(
+                    "UPDATE assets SET preview_path=? WHERE project=? AND filepath=?",
+                    (
+                        str(preview_path.relative_to(indexer.thumbnail_dir.parent)),
+                        "demo",
+                        str(relative_path),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            self.assertFalse(
+                indexer.asset_needs_indexing("demo", relative_path, 123, modified_date)
+            )
+
+    def test_same_basename_in_different_directories_gets_distinct_previews(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            with patch("dam_index.THUMBNAIL_DIR", tmp_path / "thumbnails"):
+                indexer = DAMIndexer(
+                    db_path=tmp_path / "assets.db",
+                    projects_root=tmp_path / "projects",
+                )
+            source_path = tmp_path / "clip.mov"
+
+            def fake_run(command, **kwargs):
+                output_path = Path(command[-1])
+                output_path.write_bytes(b"preview")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("dam_index.subprocess.run", side_effect=fake_run) as run:
+                first = indexer.create_video_preview(
+                    source_path, "demo", Path("motion/first/clip.mov")
+                )
+                second = indexer.create_video_preview(
+                    source_path, "demo", Path("motion/second/clip.mov")
+                )
+
+            self.assertNotEqual(first, second)
+            self.assertEqual(run.call_count, 2)
+            self.assertTrue((indexer.thumbnail_dir.parent / first).is_file())
+            self.assertTrue((indexer.thumbnail_dir.parent / second).is_file())
+            command = run.call_args_list[0].args[0]
+            command_pairs = [command[i:i + 2] for i in range(len(command) - 1)]
+            self.assertIn(["-map", "0:v:0"], command_pairs)
+            self.assertIn(["-map", "0:a?"], command_pairs)
+
+    def test_failed_transcode_cleans_partial_output_and_can_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            with patch("dam_index.THUMBNAIL_DIR", tmp_path / "thumbnails"):
+                indexer = DAMIndexer(
+                    db_path=tmp_path / "assets.db",
+                    projects_root=tmp_path / "projects",
+                )
+            source_path = tmp_path / "clip.mov"
+            relative_path = Path("video/clip.mov")
+
+            def fail_with_partial_output(command, **kwargs):
+                Path(command[-1]).write_bytes(b"partial")
+                return SimpleNamespace(returncode=1, stdout="", stderr="decode failed")
+
+            with patch("dam_index.subprocess.run", side_effect=fail_with_partial_output):
+                self.assertIsNone(
+                    indexer.create_video_preview(source_path, "demo", relative_path)
+                )
+
+            preview_dir = indexer.thumbnail_dir / "demo" / "previews"
+            self.assertEqual(list(preview_dir.iterdir()), [])
+
+            def succeed(command, **kwargs):
+                Path(command[-1]).write_bytes(b"valid preview")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("dam_index.subprocess.run", side_effect=succeed):
+                preview = indexer.create_video_preview(
+                    source_path, "demo", relative_path
+                )
+
+            self.assertIsNotNone(preview)
+            self.assertTrue((indexer.thumbnail_dir.parent / preview).is_file())
+
+
+class DAMPreviewRouteTest(unittest.TestCase):
+    def test_view_file_serves_generated_preview_as_mp4(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "assets.db"
+            filepath = "video/clip.mov"
+            path_hash = hashlib.md5(filepath.encode()).hexdigest()[:8]
+            preview_path = root / "thumbnails" / "demo" / "previews" / f"{path_hash}_clip.mp4"
+            preview_path.parent.mkdir(parents=True)
+            preview_path.write_bytes(b"converted-preview")
+            (preview_path.parent / "clip.mp4").write_bytes(b"wrong same-stem preview")
+
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    "CREATE TABLE assets (id INTEGER PRIMARY KEY, project TEXT, filepath TEXT, preview_path TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO assets (project, filepath, preview_path) VALUES (?, ?, ?)",
+                    ("demo", filepath, "thumbnails/demo/previews/clip.mp4"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            original_db_path = dam_app.DB_PATH
+            original_thumbnail_dir = dam_app.THUMBNAIL_DIR
+            original_projects_root = dam_app.PROJECTS_ROOT
+            dam_app.DB_PATH = db_path
+            dam_app.THUMBNAIL_DIR = root / "thumbnails"
+            dam_app.PROJECTS_ROOT = root / "projects"
+            try:
+                response = dam_app.app.test_client().get("/view/demo/video/clip.mov")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.mimetype, "video/mp4")
+                self.assertEqual(response.data, b"converted-preview")
+                response.close()
+            finally:
+                dam_app.DB_PATH = original_db_path
+                dam_app.THUMBNAIL_DIR = original_thumbnail_dir
+                dam_app.PROJECTS_ROOT = original_projects_root
 
 
 class DAMIndexerStoreAssetTest(unittest.TestCase):
@@ -168,15 +333,17 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
                 "git_commit": "abc123",
                 "tags": "demo,test",
                 "used": True,
+                "preview_path": "thumbnails/demo/previews/preview.mp4",
             }
 
             indexer.store_asset(metadata)
 
             conn = sqlite3.connect(db_path)
             try:
-                row = conn.execute("SELECT used FROM assets WHERE project=? AND filepath=?", ("demo", "assets/test.jpg")).fetchone()
+                row = conn.execute("SELECT used, preview_path FROM assets WHERE project=? AND filepath=?", ("demo", "assets/test.jpg")).fetchone()
                 self.assertIsNotNone(row)
                 self.assertEqual(row[0], 1)
+                self.assertEqual(row[1], "thumbnails/demo/previews/preview.mp4")
             finally:
                 conn.close()
 
@@ -430,7 +597,9 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
 
             preview_dir = root / "thumbnails" / "demo" / "previews"
             preview_dir.mkdir(parents=True, exist_ok=True)
-            preview_path = preview_dir / "preview.mp4"
+            filepath = "assets/clip.mov"
+            path_hash = hashlib.md5(filepath.encode()).hexdigest()[:8]
+            preview_path = preview_dir / f"{path_hash}_clip.mp4"
             preview_path.write_bytes(b"converted-preview")
 
             original_db_path = dam_app.DB_PATH
@@ -445,7 +614,7 @@ class DAMIndexerStoreAssetTest(unittest.TestCase):
                     db.execute("CREATE TABLE assets (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT, filepath TEXT, preview_path TEXT)")
                     db.execute(
                         "INSERT INTO assets (project, filepath, preview_path) VALUES (?, ?, ?)",
-                        ("demo", "assets/clip.mov", "thumbnails/demo/previews/preview.mp4"),
+                        ("demo", filepath, f"thumbnails/demo/previews/{preview_path.name}"),
                     )
                     db.commit()
                 finally:

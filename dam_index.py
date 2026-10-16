@@ -35,6 +35,7 @@ import hashlib
 import json
 import yaml
 import subprocess
+import tempfile
 
 from config import DB_PATH, PROJECTS_ROOT, THUMBNAIL_DIR
 
@@ -96,10 +97,10 @@ class DAMIndexer:
             'is_bundle': 'INTEGER DEFAULT 0',
             'bundle_path': 'TEXT',
             'bundle_files': 'INTEGER',
-            'preview_path': 'TEXT',
             'archived': 'INTEGER DEFAULT 0',
             'archive_source': 'TEXT',
-            'used': 'INTEGER DEFAULT 0'
+            'used': 'INTEGER DEFAULT 0',
+            'preview_path': 'TEXT'
         }
         
         for col_name, col_type in columns_to_add.items():
@@ -275,13 +276,27 @@ class DAMIndexer:
         conn = sqlite3.connect(self.db_path)
         try:
             row = conn.execute(
-                "SELECT file_size, created_date FROM assets WHERE project=? AND filepath=?",
+                "SELECT file_size, created_date, preview_path FROM assets WHERE project=? AND filepath=?",
                 (project, str(relative_path)),
             ).fetchone()
         finally:
             conn.close()
 
-        return row is None or row[0] != file_size or row[1] != modified_date
+        if row is None or row[0] != file_size or row[1] != modified_date:
+            return True
+
+        source_path = Path(relative_path)
+        if self.get_file_type(source_path).startswith('video') and source_path.suffix.lower() != '.mp4':
+            path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+            preview_path = self.thumbnail_dir / project / 'previews' / f"{path_hash}_{source_path.stem}.mp4"
+            stored_preview_path = (
+                str(preview_path.relative_to(self.thumbnail_dir.parent))
+                if preview_path.is_file() and preview_path.stat().st_size > 0
+                else None
+            )
+            return stored_preview_path is None or row[2] != stored_preview_path
+
+        return False
 
     def create_video_thumbnail(self, source_path, project, relative_path, size=(400, 400)):
         """Generate thumbnail from video file"""
@@ -314,42 +329,55 @@ class DAMIndexer:
 
     def create_video_preview(self, source_path, project, relative_path):
         """Generate a browser-playable MP4 preview for non-MP4 video sources."""
-        try:
-            if source_path.suffix.lower() == '.mp4':
-                return None
+        if source_path.suffix.lower() == '.mp4':
+            return None
 
+        temporary_path = None
+        try:
             preview_dir = self.thumbnail_dir / project / 'previews'
             preview_dir.mkdir(parents=True, exist_ok=True)
 
             path_hash = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
             preview_path = preview_dir / f"{path_hash}_{source_path.stem}.mp4"
-
-            if preview_path.exists():
+            if preview_path.is_file() and preview_path.stat().st_size > 0:
                 return str(preview_path.relative_to(self.thumbnail_dir.parent))
 
-            for candidate in preview_dir.glob('*.mp4'):
-                if candidate.stem == source_path.stem or candidate.stem.endswith(f'_{source_path.stem}'):
-                    return str(candidate.relative_to(self.thumbnail_dir.parent))
+            preview_path.unlink(missing_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=preview_dir,
+                prefix=f".{path_hash}_",
+                suffix=".mp4",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
 
             result = subprocess.run([
                 'ffmpeg',
                 '-i', str(source_path),
+                '-map', '0:v:0',
+                '-map', '0:a?',
+                '-sn',
+                '-dn',
                 '-c:v', 'libx264',
                 '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac',
                 '-movflags', '+faststart',
                 '-y',
-                str(preview_path)
+                str(temporary_path)
             ], capture_output=True, text=True)
 
-            if result.returncode == 0 and preview_path.exists():
-                return str(preview_path.relative_to(self.thumbnail_dir.parent))
+            if result.returncode != 0 or not temporary_path.is_file() or temporary_path.stat().st_size == 0:
+                print(f"    Warning: Could not create video preview for {source_path}: {result.stderr.strip()}")
+                return None
 
-            print(f"    Warning: Could not create video preview for {source_path}: {result.stderr.strip()}")
-            return None
+            temporary_path.replace(preview_path)
+            return str(preview_path.relative_to(self.thumbnail_dir.parent))
         except Exception as e:
-            print(f"    Warning: Could not create video preview: {e}")
+            print(f"    Warning: Could not create video preview for {source_path}: {e}")
             return None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def get_file_type(self, path):
         """Determine MIME type"""
@@ -500,7 +528,7 @@ class DAMIndexer:
         (tags, ai_description) are never overwritten by a reindex.
         Only system-derived fields that may legitimately change (file_size,
         dvc_hash, thumbnail_path, indexed_date, git_commit, dimensions, bundle
-        info) are updated on subsequent runs.
+        info, and preview_path) are updated on subsequent runs.
         """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
