@@ -112,6 +112,61 @@
             display: flex;
             gap: 10px;
         }
+
+        .fcp-button {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px 16px;
+            border-radius: 4px;
+            background: #4b3b76;
+            color: #fff;
+            text-decoration: none;
+            text-align: center;
+            flex: 1;
+            font-size: 14px;
+        }
+
+        .fcp-button:hover {
+            background: #604d96;
+        }
+
+        .fcp-button[hidden],
+        .fcp-disabled[hidden],
+        .fcp-hint[hidden] {
+            display: none;
+        }
+
+        .fcp-disabled {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px 16px;
+            border-radius: 4px;
+            background: #353535;
+            color: #999;
+            text-align: center;
+            flex: 1;
+            font-size: 14px;
+            cursor: not-allowed;
+        }
+
+        .fcp-hint {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 20px;
+            background: #242033;
+            color: #d8d1eb;
+            font-size: 12px;
+        }
+
+        .fcp-hint button {
+            flex: 0 0 auto;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
         
         button {
             padding: 10px 20px;
@@ -448,6 +503,11 @@
         <h1>{{ asset.filename }}</h1>
         <div></div>
     </header>
+
+    <div id="fcp-hint" class="fcp-hint" hidden>
+        <span>Requires the DAMnation Handler (run tools/macos/install_fcp_handler.sh)</span>
+        <button id="dismiss-fcp-hint" class="secondary" type="button" aria-label="Dismiss Final Cut Pro hint">Dismiss</button>
+    </div>
     
     <div class="container">
         <!-- Preview Section -->
@@ -536,6 +596,15 @@
                 <button class="secondary" onclick="copyPath('{{ asset.filepath }}')">
                     📋 Copy Path
                 </button>
+            </div>
+            <div class="actions" style="margin-top:10px;">
+                {% if asset.is_bundle %}
+                <span class="fcp-disabled" title="Motion and GarageBand bundle assets cannot be sent to Final Cut Pro.">Send to Final Cut Pro (bundle)</span>
+                {% elif asset.missing %}
+                <span class="fcp-disabled" title="This asset is not available on the local filesystem.">Send to Final Cut Pro (missing)</span>
+                {% else %}
+                <a class="fcp-button" href="damnation://send-to-fcp?ids={{ asset.id }}">Send to Final Cut Pro</a>
+                {% endif %}
             </div>
         </div>
         
@@ -675,6 +744,29 @@
     </div>
     
     <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const isMac = /(Mac|iPhone|iPad|iPod)/i.test(navigator.platform || '');
+            document.querySelectorAll('.fcp-button, .fcp-disabled').forEach((control) => {
+                control.hidden = !isMac;
+            });
+            const hint = document.getElementById('fcp-hint');
+            if (hint && isMac) {
+                try {
+                    hint.hidden = localStorage.getItem('damnation-fcp-handler-hint-dismissed') === 'true';
+                } catch (error) {
+                    hint.hidden = false;
+                }
+            }
+            document.getElementById('dismiss-fcp-hint')?.addEventListener('click', () => {
+                if (hint) hint.hidden = true;
+                try {
+                    localStorage.setItem('damnation-fcp-handler-hint-dismissed', 'true');
+                } catch (error) {
+                    // The hint remains dismissed for this page view.
+                }
+            });
+        });
+
         function copyPath(path) {
             navigator.clipboard.writeText(path);
             const button = event.target;

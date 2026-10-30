@@ -35,6 +35,7 @@ from config import (
     FLASK_ENV, GIT_BRANCH, S3_UPLOAD_BUCKET, S3_UPLOAD_PUBLIC_URL,
     S3_UPLOAD_ENDPOINT_URL, S3_UPLOAD_KEY_PREFIX, AWS_DEFAULT_REGION,
 )
+from dam_utils import resolve_asset_path as resolve_asset_path_from_root
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['ENV'] = FLASK_ENV
@@ -240,18 +241,7 @@ def normalize_status(status):
 
 def resolve_asset_path(project, filepath):
     """Return the actual file path on disk and the relative path if the asset was moved."""
-    project_assets_root = PROJECTS_ROOT / project / 'assets'
-    exact_path = project_assets_root / filepath
-    if exact_path.exists():
-        return exact_path, filepath
-
-    if project_assets_root.exists():
-        filename = Path(filepath).name
-        for candidate in project_assets_root.rglob(filename):
-            if candidate.is_file():
-                return candidate, str(candidate.relative_to(project_assets_root))
-
-    return exact_path, None
+    return resolve_asset_path_from_root(project, filepath, PROJECTS_ROOT)
 
 
 def is_asset_missing(project, filepath):
@@ -391,7 +381,7 @@ def index():
         asset_dict['versions'] = versions
         asset_dict['version_count'] = len(versions)
 
-        asset_path, resolved_relative = resolve_asset_path(asset['project'], asset['filepath'])
+        asset_path, _ = resolve_asset_path(asset['project'], asset['filepath'])
         asset_dict['resolved_path'] = resolved_relative
         asset_dict['missing'] = not asset_path.exists()
         asset_dict['moved'] = bool(resolved_relative and resolved_relative != asset['filepath'])
@@ -573,6 +563,8 @@ def asset_detail(asset_id):
     asset = dict(asset_row)
     asset['tags'] = normalize_tags(asset.get('tags'))
     asset['review_status'] = normalize_status(asset.get('review_status'))
+    asset_path, resolved_relative = resolve_asset_path(asset['project'], asset['filepath'])
+    asset['missing'] = not asset_path.exists()
     
     # Get version history from git
     versions = []

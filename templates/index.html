@@ -130,6 +130,48 @@
             margin-right: auto;
         }
 
+        .fcp-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 38px;
+            padding: 8px 14px;
+            border-radius: 4px;
+            background: #4b3b76;
+            color: #fff;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .fcp-button:hover {
+            background: #604d96;
+        }
+
+        .fcp-button[hidden] {
+            display: none;
+        }
+
+        .fcp-hint {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 20px;
+            background: #242033;
+            color: #d8d1eb;
+            font-size: 12px;
+        }
+
+        .fcp-hint[hidden] {
+            display: none;
+        }
+
+        .fcp-hint button {
+            min-height: 28px;
+            padding: 4px 8px;
+            background: #404040;
+        }
+
         .asset-select {
             position: absolute;
             top: 10px;
@@ -779,6 +821,11 @@
         </div>
     </div>
     
+    <div id="fcp-hint" class="fcp-hint" hidden>
+        <span>Requires the DAMnation Handler (run tools/macos/install_fcp_handler.sh)</span>
+        <button id="dismiss-fcp-hint" type="button" aria-label="Dismiss Final Cut Pro hint">Dismiss</button>
+    </div>
+
     {% if results %}
     <div class="bulk-toolbar" role="toolbar" aria-label="Bulk asset actions">
         <label><input id="select-all-assets" type="checkbox"> Select all on page</label>
@@ -794,6 +841,7 @@
         <label><input id="bulk-append-tags" type="checkbox" checked> Append tags</label>
         <button id="bulk-edit-button" type="button">Save edits</button>
         <button id="bulk-download-button" type="button" class="btn-download">Download selected</button>
+        <a id="bulk-fcp-button" class="fcp-button" href="#" hidden>Send to Final Cut Pro</a>
     </div>
     <div class="grid">
         {% for asset in results %}
@@ -1015,6 +1063,8 @@
         });
         document.getElementById('bulk-edit-button')?.addEventListener('click', bulkEditAssets);
         document.getElementById('bulk-download-button')?.addEventListener('click', bulkDownloadAssets);
+        document.getElementById('bulk-fcp-button')?.addEventListener('click', sendBulkToFinalCutPro);
+        configureFcpControls();
 
         document.getElementById('preview-modal')?.addEventListener('click', (event) => {
             if (event.target.id === 'preview-modal') {
@@ -1044,6 +1094,49 @@
             selectAll.checked = checkboxes.length > 0 && selected.length === checkboxes.length;
             selectAll.indeterminate = selected.length > 0 && selected.length < checkboxes.length;
         }
+        const fcpButton = document.getElementById('bulk-fcp-button');
+        if (fcpButton) {
+            fcpButton.setAttribute('aria-disabled', selected.length ? 'false' : 'true');
+            fcpButton.style.opacity = selected.length ? '1' : '0.55';
+        }
+    }
+
+    function configureFcpControls() {
+        const isMac = /(Mac|iPhone|iPad|iPod)/i.test(navigator.platform || '');
+        document.querySelectorAll('.fcp-button').forEach((button) => {
+            button.hidden = !isMac;
+        });
+        const hint = document.getElementById('fcp-hint');
+        if (hint && isMac) {
+            try {
+                hint.hidden = localStorage.getItem('damnation-fcp-handler-hint-dismissed') === 'true';
+            } catch (error) {
+                hint.hidden = false;
+            }
+        }
+        document.getElementById('dismiss-fcp-hint')?.addEventListener('click', () => {
+            const hintElement = document.getElementById('fcp-hint');
+            if (hintElement) hintElement.hidden = true;
+            try {
+                localStorage.setItem('damnation-fcp-handler-hint-dismissed', 'true');
+            } catch (error) {
+                // The hint remains dismissed for this page view.
+            }
+        });
+    }
+
+    function sendBulkToFinalCutPro(event) {
+        event.preventDefault();
+        const assetIds = selectedAssetIds();
+        if (!assetIds.length) {
+            alert('Select at least one asset to send to Final Cut Pro.');
+            return;
+        }
+        if (assetIds.length > 200) {
+            alert('Select 200 or fewer assets at a time to keep the custom URL within a safe length.');
+            return;
+        }
+        window.location.href = `damnation://send-to-fcp?ids=${assetIds.join(',')}`;
     }
 
     async function bulkEditAssets() {

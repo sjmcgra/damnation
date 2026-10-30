@@ -177,6 +177,70 @@ class DAMPreviewRouteTest(unittest.TestCase):
                 dam_app.PROJECTS_ROOT = original_projects_root
 
 
+class DAMFinalCutProButtonTest(unittest.TestCase):
+    def test_asset_detail_disables_unavailable_assets_and_links_local_assets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "assets.db"
+            projects_root = root / "projects"
+            assets_root = projects_root / "demo" / "assets"
+            assets_root.mkdir(parents=True)
+            (assets_root / "local.png").write_bytes(b"image")
+            (assets_root / "bundle.motn").write_bytes(b"bundle")
+
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """CREATE TABLE assets (
+                        id INTEGER PRIMARY KEY, project TEXT, filepath TEXT,
+                        filename TEXT, file_type TEXT, file_size INTEGER,
+                        width INTEGER, height INTEGER, dvc_hash TEXT,
+                        thumbnail_path TEXT, preview_path TEXT, tags TEXT,
+                        review_status TEXT, created_date TEXT, indexed_date TEXT,
+                        git_commit TEXT, is_bundle INTEGER, bundle_path TEXT,
+                        bundle_files INTEGER, used INTEGER
+                    )"""
+                )
+                conn.executemany(
+                    """INSERT INTO assets
+                       (id, project, filepath, filename, file_type, file_size, is_bundle)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        (1, "demo", "missing.png", "missing.png", "image/png", 10, 0),
+                        (2, "demo", "local.png", "local.png", "image/png", 10, 0),
+                        (3, "demo", "bundle.motn", "bundle.motn", "application/x-motion", 10, 1),
+                    ],
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            original_values = {
+                "DB_PATH": dam_app.DB_PATH,
+                "THUMBNAIL_DIR": dam_app.THUMBNAIL_DIR,
+                "PROJECTS_ROOT": dam_app.PROJECTS_ROOT,
+            }
+            dam_app.DB_PATH = db_path
+            dam_app.THUMBNAIL_DIR = root / "thumbnails"
+            dam_app.PROJECTS_ROOT = projects_root
+            try:
+                client = dam_app.app.test_client()
+                missing = client.get("/asset/1")
+                self.assertEqual(missing.status_code, 200)
+                self.assertIn(b"Send to Final Cut Pro (missing)", missing.data)
+                self.assertNotIn(b"href=\"damnation://send-to-fcp", missing.data)
+
+                local = client.get("/asset/2")
+                self.assertIn(b"href=\"damnation://send-to-fcp?ids=2\"", local.data)
+
+                bundle = client.get("/asset/3")
+                self.assertIn(b"Send to Final Cut Pro (bundle)", bundle.data)
+                self.assertNotIn(b"href=\"damnation://send-to-fcp?ids=3\"", bundle.data)
+            finally:
+                for name, value in original_values.items():
+                    setattr(dam_app, name, value)
+
+
 class DAMIndexerStoreAssetTest(unittest.TestCase):
     def test_startup_migrates_legacy_database_and_preserves_assets(self):
         with tempfile.TemporaryDirectory() as tmpdir:
