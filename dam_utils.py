@@ -43,3 +43,20 @@ def get_env_for_dvc():
 
 def expand_local_path(path):
     return Path(path).expanduser()
+
+
+def resolve_asset_path(project, filepath, projects_root=None):
+    """Return the on-disk asset path and its current path relative to assets/."""
+    root = Path(projects_root) if projects_root is not None else PROJECTS_ROOT
+    project_assets_root = root / project / "assets"
+    exact_path = project_assets_root / filepath
+    if exact_path.exists():
+        return exact_path, filepath
+
+    if project_assets_root.exists():
+        filename = Path(filepath).name
+        for candidate in project_assets_root.rglob(filename):
+            if candidate.is_file():
+                return candidate, str(candidate.relative_to(project_assets_root))
+
+    return exact_path, None
