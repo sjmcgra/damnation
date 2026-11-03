@@ -12,6 +12,11 @@ DAMnation is a self-hosted digital asset management system for media projects tr
 - Multi-project sync support and project initialization from an absolute path.
 - AWS S3 and Backblaze B2 storage support, plus uploads of image references to S3-compatible storage.
 
+## What's new in v26.4
+
+- Send selected local video, audio, and still-image assets from the web UI directly to Final Cut Pro with DAMnation tags and review ratings.
+- Added the optional macOS `damnation://` URL handler and host-side FCPXML exporter.
+
 ## How it works
 
 DAMnation has two distinct sides:
@@ -83,6 +88,7 @@ source .venv/bin/activate
 ```
 
 This installs the Python dependencies into a local `.venv` for the host-side CLI tools (indexer, search, utilities). The container uses its own separate environment.
+On macOS, the installer also offers to install the optional Final Cut Pro URL handler. You can install or remove it later with `tools/macos/install_fcp_handler.sh` or `tools/macos/uninstall_fcp_handler.sh`.
 
 ### 3. Start the web UI
 
@@ -94,13 +100,13 @@ Open http://localhost:5500 (or the port set in `WEB_PORT`).
 
 ### Updating an existing installation
 
-After updating the checkout to v26.3, rebuild and restart the web container:
+After updating the checkout to v26.4, rebuild and restart the web container:
 
 ```bash
 docker compose up --build -d
 ```
 
-On startup, the web app checks the shared SQLite database and adds any missing v26.3 schema columns and review-status table. This migration is idempotent and preserves existing asset records; do not delete `DB_DATA_PATH` or `assets.db` to upgrade. The host-side indexer also applies the asset-column migrations when it runs.
+On startup, the web app checks the shared SQLite database and adds any missing schema columns and review-status table. This migration is idempotent and preserves existing asset records; do not delete `DB_DATA_PATH` or `assets.db` to upgrade. The host-side indexer also applies the asset-column migrations when it runs.
 
 ## Storage backends
 
@@ -276,6 +282,69 @@ Asset detail pages include Git/DVC history when available. The DVC history panel
 ./dam_restore.sh hokai_ep1 generated_images/scene.png <git_commit>
 ./dam_restore.sh hokai_ep1 generated_images/scene.png <git_commit> --copy
 ```
+
+## Send to Final Cut Pro
+
+The web UI can send one asset from its detail page or multiple selected assets from
+the index page to Final Cut Pro. The browser opens a custom `damnation://` URL;
+an optional native macOS URL handler then runs the host-side exporter. The
+exporter reads the shared `assets.db` using the host paths in `.env`, resolves
+files below `PROJECTS_ROOT`, writes an FCPXML 1.10 event, and opens it in Final
+Cut Pro. Flask does not try to launch a host application or infer host paths from
+the Docker container.
+
+### Install the macOS handler
+
+Run this from the DAMnation checkout on the Mac that has the project files and
+the host `.venv`:
+
+```bash
+tools/macos/install_fcp_handler.sh
+```
+
+The handler installs as `~/Applications/DAMnation Handler.app` and registers
+the `damnation://` URL scheme. `./install.sh` also offers this installation
+option on macOS; declining it does not affect the rest of DAMnation. To remove
+the handler, run:
+
+```bash
+tools/macos/uninstall_fcp_handler.sh
+```
+
+### Usage
+
+- Open an asset detail page and choose **Send to Final Cut Pro**, or select up
+  to 200 assets on the index page and choose the bulk action.
+- Final Cut Pro opens an event named after each asset's project (or a name
+  supplied with the exporter `--event` option).
+- Asset tags are added as clip keywords. `favorite` and `rejected` review
+  statuses become FCP ratings; other review statuses become `status:<name>`
+  keywords.
+- Run the exporter directly for scripting or diagnostics:
+
+  ```bash
+  source .venv/bin/activate
+  python fcpxml_export.py --ids 12,15,40 --output /tmp/dam-assets.fcpxml
+  python fcpxml_export.py --url 'damnation://send-to-fcp?ids=12,15,40' --open
+  ```
+
+### Limitations and troubleshooting
+
+- This integration requires macOS and the optional handler. On other browsers,
+  the Send to Final Cut Pro controls are hidden.
+- The handler runs the Python environment and exporter from the checkout where
+  it was installed. Reinstall it after moving the checkout or recreating `.venv`.
+- Only locally available video, audio, and still-image files are exported.
+  Motion/GarageBand bundles, unsupported file types, and missing files are
+  reported and skipped. Assets present only in DVC/S3 must first be retrieved
+  locally; the exporter does not download media from remote storage.
+- If the handler is not registered, rerun
+  `tools/macos/install_fcp_handler.sh` and reload the page. If the app does not
+  launch, confirm Final Cut Pro is installed and that macOS allows it to open
+  FCPXML files. Run the exporter directly to see detailed errors.
+- Confirm `.env` points `DB_PATH` and `PROJECTS_ROOT` at the host database and
+  project files; the Docker container's `/projects` path is not a valid host
+  path for this operation.
 
 ### Utilities
 

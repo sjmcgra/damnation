@@ -43,3 +43,22 @@ PY
 echo "Installation complete. You are DAM'd"
 echo "Activate the environment with: source .venv/bin/activate"
 echo "Edit .env before running the application."
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  if [ -t 0 ]; then
+    read -r -p "Install the optional DAMnation Final Cut Pro URL handler? [y/N] " install_fcp_handler || install_fcp_handler=""
+    case "$install_fcp_handler" in
+      y|Y|yes|YES)
+        tools/macos/install_fcp_handler.sh
+        ;;
+      *)
+        echo "Skipping Final Cut Pro URL handler installation."
+        ;;
+    esac
+  else
+    echo "Skipping optional Final Cut Pro URL handler prompt (no interactive terminal)."
+  fi
+else
+  echo "On macOS, install the optional Final Cut Pro URL handler with:"
+  echo "  tools/macos/install_fcp_handler.sh"
+fi
