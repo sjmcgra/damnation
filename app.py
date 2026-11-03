@@ -381,7 +381,7 @@ def index():
         asset_dict['versions'] = versions
         asset_dict['version_count'] = len(versions)
 
-        asset_path, _ = resolve_asset_path(asset['project'], asset['filepath'])
+        asset_path, resolved_relative = resolve_asset_path(asset['project'], asset['filepath'])
         asset_dict['resolved_path'] = resolved_relative
         asset_dict['missing'] = not asset_path.exists()
         asset_dict['moved'] = bool(resolved_relative and resolved_relative != asset['filepath'])
@@ -563,7 +563,7 @@ def asset_detail(asset_id):
     asset = dict(asset_row)
     asset['tags'] = normalize_tags(asset.get('tags'))
     asset['review_status'] = normalize_status(asset.get('review_status'))
-    asset_path, resolved_relative = resolve_asset_path(asset['project'], asset['filepath'])
+    asset_path, _ = resolve_asset_path(asset['project'], asset['filepath'])
     asset['missing'] = not asset_path.exists()
     
     # Get version history from git

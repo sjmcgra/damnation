@@ -178,6 +178,46 @@ class DAMPreviewRouteTest(unittest.TestCase):
 
 
 class DAMFinalCutProButtonTest(unittest.TestCase):
+    def test_index_route_renders_asset_path_resolution(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "assets.db"
+            projects_root = root / "projects"
+            asset_path = projects_root / "demo" / "assets" / "moved" / "clip.mov"
+            asset_path.parent.mkdir(parents=True)
+            asset_path.write_bytes(b"video")
+
+            with patch("dam_index.THUMBNAIL_DIR", root / "thumbnails"):
+                DAMIndexer(db_path=db_path, projects_root=projects_root)
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """INSERT INTO assets
+                       (id, project, filepath, filename, file_type, file_size,
+                        tags, indexed_date, is_bundle)
+                       VALUES (1, 'demo', 'original/clip.mov', 'clip.mov',
+                               'video/quicktime', 5, '', '2026-11-03', 0)"""
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            original_values = {
+                "DB_PATH": dam_app.DB_PATH,
+                "THUMBNAIL_DIR": dam_app.THUMBNAIL_DIR,
+                "PROJECTS_ROOT": dam_app.PROJECTS_ROOT,
+            }
+            dam_app.DB_PATH = db_path
+            dam_app.THUMBNAIL_DIR = root / "thumbnails"
+            dam_app.PROJECTS_ROOT = projects_root
+            try:
+                response = dam_app.app.test_client().get("/")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"moved/clip.mov", response.data)
+            finally:
+                for name, value in original_values.items():
+                    setattr(dam_app, name, value)
+
     def test_asset_detail_disables_unavailable_assets_and_links_local_assets(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
