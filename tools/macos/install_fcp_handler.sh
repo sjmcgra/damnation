@@ -20,6 +20,8 @@ DAMNATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 PYTHON_PATH="$DAMNATION_DIR/.venv/bin/python"
 EXPORTER_PATH="$DAMNATION_DIR/fcpxml_export.py"
 HANDLER_APP="$HOME/Applications/DAMnation Handler.app"
+LOG_DIR="$HOME/Library/Logs/DAMnation"
+LOG_PATH="$LOG_DIR/handler.log"
 APPLE_SCRIPT_DIR="$(mktemp -d)"
 APPLE_SCRIPT="$APPLE_SCRIPT_DIR/DAMnationHandler.applescript"
 trap 'rm -f "$APPLE_SCRIPT"; rmdir "$APPLE_SCRIPT_DIR"' EXIT
@@ -38,28 +40,53 @@ if ! command -v osacompile >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$HOME/Applications"
+# The URL handler runs with a minimal PATH, so resolve ffprobe now and pass it along.
+FFPROBE_PATH="$(command -v ffprobe || true)"
+if [[ -z "$FFPROBE_PATH" ]]; then
+    for candidate in /opt/homebrew/bin/ffprobe /usr/local/bin/ffprobe; do
+        if [[ -x "$candidate" ]]; then
+            FFPROBE_PATH="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -z "$FFPROBE_PATH" ]]; then
+    echo "Warning: ffprobe was not found. Install ffmpeg (for example: brew install ffmpeg)." >&2
+fi
+
+mkdir -p "$HOME/Applications" "$LOG_DIR"
 rm -rf "$HANDLER_APP"
 
-"$PYTHON_PATH" - "$APPLE_SCRIPT" "$PYTHON_PATH" "$EXPORTER_PATH" <<'PY'
+"$PYTHON_PATH" - "$APPLE_SCRIPT" "$PYTHON_PATH" "$EXPORTER_PATH" "$FFPROBE_PATH" "$LOG_PATH" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-script_path, python_path, exporter_path = sys.argv[1:]
+script_path, python_path, exporter_path, ffprobe_path, log_path = sys.argv[1:]
 source = '''property pythonPath : @PYTHON_PATH@
 property exporterPath : @EXPORTER_PATH@
+property ffprobePath : @FFPROBE_PATH@
+property logPath : @LOG_PATH@
+
+on logLine(messageText)
+    try
+        do shell script "/bin/echo " & quoted form of (((current date) as string) & " " & messageText) & " >> " & quoted form of logPath
+    end try
+end logLine
 
 on open location theURL
+    my logLine("Received " & theURL)
     try
         do shell script "/usr/bin/printf '%s' " & quoted form of theURL & " | /usr/bin/grep -Eq '^damnation://send-to-fcp[?]ids=[0-9,]+$'"
     on error
+        my logLine("Ignored unsupported URL")
         return
     end try
 
-    set commandText to quoted form of pythonPath & " " & quoted form of exporterPath & " --url " & quoted form of theURL & " --open"
+    set commandText to "FFPROBE=" & quoted form of ffprobePath & " " & quoted form of pythonPath & " " & quoted form of exporterPath & " --url " & quoted form of theURL & " --open"
     try
         set outputText to do shell script commandText & " 2>&1"
+        my logLine(outputText)
         set notificationText to "Sent clips to Final Cut Pro"
         set openFailure to ""
         repeat with outputLine in paragraphs of outputText
@@ -67,11 +94,13 @@ on open location theURL
             if outputLine starts with "Error opening Final Cut Pro:" then set openFailure to outputLine
         end repeat
         if openFailure is not "" then
+            my logLine(openFailure)
             display notification openFailure with title "DAMnation" subtitle "Final Cut Pro import failed"
         else
             display notification notificationText with title "DAMnation"
         end if
     on error errorMessage number errorNumber
+        my logLine("Export failed (" & errorNumber & "): " & errorMessage)
         set firstLine to paragraph 1 of errorMessage
         display notification firstLine with title "DAMnation" subtitle "Final Cut Pro import failed"
     end try
@@ -79,6 +108,8 @@ end open location
 '''
 source = source.replace("@PYTHON_PATH@", json.dumps(python_path, ensure_ascii=False))
 source = source.replace("@EXPORTER_PATH@", json.dumps(exporter_path, ensure_ascii=False))
+source = source.replace("@FFPROBE_PATH@", json.dumps(ffprobe_path, ensure_ascii=False))
+source = source.replace("@LOG_PATH@", json.dumps(log_path, ensure_ascii=False))
 Path(script_path).write_text(source, encoding="utf-8")
 PY
 
@@ -103,3 +134,4 @@ if [[ ! -x "$LSREGISTER" ]]; then
 fi
 "$LSREGISTER" -f "$HANDLER_APP"
 echo "Installed DAMnation URL handler at: $HANDLER_APP"
+echo "Handler log: $LOG_PATH"
