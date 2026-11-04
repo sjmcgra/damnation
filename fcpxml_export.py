@@ -21,7 +21,9 @@
 
 import argparse
 import json
+import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -52,6 +54,7 @@ STILL_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".psd"}
 VIDEO_EXTENSIONS = {".mov", ".mp4", ".m4v", ".avi", ".mkv", ".mxf", ".webm"}
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".aif", ".aiff", ".flac", ".ogg"}
 ID_PATTERN = re.compile(r"[0-9]+(?:,[0-9]+)*\Z")
+FFPROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
 
 
 def parse_asset_ids(value):
@@ -145,11 +148,26 @@ def file_url(path):
     return "file://" + quote(absolute_path.as_posix(), safe="/")
 
 
+def find_ffprobe():
+    """Locate ffprobe even when launched with a minimal PATH (e.g. the macOS URL handler)."""
+    explicit = os.environ.get("FFPROBE")
+    if explicit:
+        return explicit
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    for directory in FFPROBE_FALLBACK_DIRS:
+        candidate = Path(directory) / "ffprobe"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return "ffprobe"
+
+
 def probe_media(path):
     """Return ffprobe stream and container metadata for a media file."""
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-show_streams", "-show_format",
+            find_ffprobe(), "-v", "error", "-show_streams", "-show_format",
             "-of", "json", str(path),
         ],
         capture_output=True,
