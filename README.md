@@ -348,6 +348,13 @@ tools/macos/uninstall_fcp_handler.sh
 - Confirm `.env` points `DB_PATH` and `PROJECTS_ROOT` at the host database and
   project files; the Docker container's `/projects` path is not a valid host
   path for this operation.
+- The handler runs with a minimal `PATH`, so the installer records where
+  `ffprobe` lives. Install ffmpeg first (for example `brew install ffmpeg`) and
+  rerun `tools/macos/install_fcp_handler.sh` if you install or move it later.
+- If clicking **Send to Final Cut Pro** appears to do nothing, check
+  `~/Library/Logs/DAMnation/handler.log`. The handler records each request, the
+  exporter output, and any errors there, even when macOS suppresses
+  notifications.
 
 ### Utilities
 
