@@ -341,7 +341,10 @@ tools/macos/uninstall_fcp_handler.sh
 - If the handler is not registered, rerun
   `tools/macos/install_fcp_handler.sh` and reload the page. If the app does not
   launch, confirm Final Cut Pro is installed and that macOS allows it to open
-  FCPXML files. Run the exporter directly to see detailed errors.
+  FCPXML files. If `spctl --assess --type execute` reports that the helper has
+  an invalid `Info.plist` or modified signature, rerun the installer; it
+  re-signs the applet after configuring its URL scheme. Run the exporter
+  directly to see detailed errors.
 - Confirm `.env` points `DB_PATH` and `PROJECTS_ROOT` at the host database and
   project files; the Docker container's `/projects` path is not a valid host
   path for this operation.

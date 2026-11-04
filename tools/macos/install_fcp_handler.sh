@@ -93,6 +93,9 @@ PLIST="$HANDLER_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Delete :LSUIElement' "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c 'Add :LSUIElement bool true' "$PLIST"
 
+codesign --force --sign - "$HANDLER_APP"
+codesign --verify --strict --verbose=2 "$HANDLER_APP"
+
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [[ ! -x "$LSREGISTER" ]]; then
     echo "Launch Services registration utility not found: $LSREGISTER" >&2
