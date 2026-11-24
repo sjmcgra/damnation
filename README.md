@@ -14,7 +14,7 @@ DAMnation is a self-hosted digital asset management system for media projects tr
 
 ## What's new in v26.4
 
-- Send selected local video, audio, and still-image assets from the web UI directly to Final Cut Pro with DAMnation tags and review ratings.
+- Send selected local video, audio, and still-image assets from the web UI directly to Final Cut Pro with DAMnation tags and review ratings, or queue assets across search pages for a batch export.
 - Added the optional macOS `damnation://` URL handler and host-side FCPXML exporter.
 
 ## How it works

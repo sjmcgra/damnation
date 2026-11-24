@@ -114,6 +114,10 @@
             border-bottom: 1px solid #404040;
         }
 
+        .bulk-toolbar[hidden] {
+            display: none;
+        }
+
         .bulk-toolbar input[type="text"], .bulk-toolbar select {
             min-width: 160px;
             flex: 0 1 auto;
@@ -125,6 +129,12 @@
         }
 
         .bulk-count {
+            color: #d4d4d4;
+            font-size: 13px;
+            margin-right: auto;
+        }
+
+        .fcp-queue-count {
             color: #d4d4d4;
             font-size: 13px;
             margin-right: auto;
@@ -826,6 +836,12 @@
         <button id="dismiss-fcp-hint" type="button" aria-label="Dismiss Final Cut Pro hint">Dismiss</button>
     </div>
 
+    <div id="fcp-queue-toolbar" class="bulk-toolbar" role="toolbar" aria-label="Final Cut Pro export queue" hidden>
+        <span id="fcp-queue-count" class="fcp-queue-count">0 assets queued</span>
+        <button id="send-fcp-queue-button" type="button" class="fcp-button">Send queue to Final Cut Pro</button>
+        <button id="clear-fcp-queue-button" type="button" class="btn-small secondary">Clear queue</button>
+    </div>
+
     {% if results %}
     <div class="bulk-toolbar" role="toolbar" aria-label="Bulk asset actions">
         <label><input id="select-all-assets" type="checkbox"> Select all on page</label>
@@ -841,7 +857,8 @@
         <label><input id="bulk-append-tags" type="checkbox" checked> Append tags</label>
         <button id="bulk-edit-button" type="button">Save edits</button>
         <button id="bulk-download-button" type="button" class="btn-download">Download selected</button>
-        <a id="bulk-fcp-button" class="fcp-button" href="#" hidden>Send to Final Cut Pro</a>
+        <button id="bulk-fcp-button" type="button" class="fcp-button" hidden>Send selected to Final Cut Pro</button>
+        <button id="add-fcp-queue-button" type="button" class="fcp-button" hidden>Add selected to FCP queue</button>
     </div>
     <div class="grid">
         {% for asset in results %}
@@ -1064,7 +1081,14 @@
         document.getElementById('bulk-edit-button')?.addEventListener('click', bulkEditAssets);
         document.getElementById('bulk-download-button')?.addEventListener('click', bulkDownloadAssets);
         document.getElementById('bulk-fcp-button')?.addEventListener('click', sendBulkToFinalCutPro);
+        document.getElementById('add-fcp-queue-button')?.addEventListener('click', addSelectedToFcpQueue);
+        document.getElementById('send-fcp-queue-button')?.addEventListener('click', sendFcpQueueToFinalCutPro);
+        document.getElementById('clear-fcp-queue-button')?.addEventListener('click', clearFcpQueue);
         configureFcpControls();
+        updateFcpQueueDisplay();
+        window.addEventListener('storage', (event) => {
+            if (event.key === fcpQueueStorageKey()) updateFcpQueueDisplay();
+        });
 
         document.getElementById('preview-modal')?.addEventListener('click', (event) => {
             if (event.target.id === 'preview-modal') {
@@ -1102,7 +1126,7 @@
     }
 
     function configureFcpControls() {
-        const isMac = /(Mac|iPhone|iPad|iPod)/i.test(navigator.platform || '');
+        const isMac = isMacPlatform();
         document.querySelectorAll('.fcp-button').forEach((button) => {
             button.hidden = !isMac;
         });
@@ -1125,6 +1149,58 @@
         });
     }
 
+    function isMacPlatform() {
+        return /(Mac|iPhone|iPad|iPod)/i.test(navigator.platform || '');
+    }
+
+    function fcpQueueStorageKey() {
+        return 'dam-fcp-queue';
+    }
+
+    function readFcpQueue() {
+        const queue = JSON.parse(localStorage.getItem(fcpQueueStorageKey()) || '[]');
+        if (!Array.isArray(queue)) throw new Error('Final Cut Pro queue data is invalid.');
+        return [...new Set(queue.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+    }
+
+    function writeFcpQueue(assetIds) {
+        localStorage.setItem(fcpQueueStorageKey(), JSON.stringify(assetIds));
+    }
+
+    function updateFcpQueueDisplay() {
+        const toolbar = document.getElementById('fcp-queue-toolbar');
+        const count = document.getElementById('fcp-queue-count');
+        if (!toolbar || !count) return;
+        try {
+            const queue = readFcpQueue();
+            count.textContent = `${queue.length} ${queue.length === 1 ? 'asset' : 'assets'} queued`;
+            toolbar.hidden = !isMacPlatform() || queue.length === 0;
+        } catch (error) {
+            console.error('Unable to read Final Cut Pro queue:', error);
+            count.textContent = 'Queue unavailable';
+            toolbar.hidden = !isMacPlatform();
+        }
+    }
+
+    function deselectAssetIds(assetIds) {
+        const deselectedIds = new Set(assetIds);
+        const selectionPrefix = 'dam-selected-assets:';
+        const selectionKeys = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index);
+            if (key && key.startsWith(selectionPrefix)) selectionKeys.push(key);
+        }
+        selectionKeys.forEach((key) => {
+            const savedIds = JSON.parse(localStorage.getItem(key) || '[]');
+            if (!Array.isArray(savedIds)) throw new Error('Saved asset selection data is invalid.');
+            localStorage.setItem(key, JSON.stringify(savedIds.filter((id) => !deselectedIds.has(Number(id)))));
+        });
+        document.querySelectorAll('.asset-select').forEach((checkbox) => {
+            if (deselectedIds.has(Number(checkbox.value))) checkbox.checked = false;
+        });
+        updateBulkSelection();
+    }
+
     function sendBulkToFinalCutPro(event) {
         event.preventDefault();
         const assetIds = selectedAssetIds();
@@ -1136,7 +1212,65 @@
             alert('Select 200 or fewer assets at a time to keep the custom URL within a safe length.');
             return;
         }
+        try {
+            deselectAssetIds(assetIds);
+        } catch (error) {
+            console.error('Unable to clear exported asset selection:', error);
+            alert('Could not update the selected assets. Please try again.');
+            return;
+        }
         window.location.href = `damnation://send-to-fcp?ids=${assetIds.join(',')}`;
+    }
+
+    function addSelectedToFcpQueue() {
+        const assetIds = selectedAssetIds();
+        if (!assetIds.length) {
+            alert('Select at least one asset to add to the Final Cut Pro queue.');
+            return;
+        }
+        try {
+            const queue = readFcpQueue();
+            const updatedQueue = [...new Set([...queue, ...assetIds])];
+            if (updatedQueue.length > 200) {
+                alert('The Final Cut Pro queue can contain up to 200 assets. Send or clear some assets before adding more.');
+                return;
+            }
+            writeFcpQueue(updatedQueue);
+            deselectAssetIds(assetIds);
+            updateFcpQueueDisplay();
+        } catch (error) {
+            console.error('Unable to add assets to Final Cut Pro queue:', error);
+            alert(error.message || 'Could not add assets to the Final Cut Pro queue.');
+        }
+    }
+
+    function sendFcpQueueToFinalCutPro() {
+        let queue;
+        try {
+            queue = readFcpQueue();
+            if (!queue.length) {
+                alert('The Final Cut Pro queue is empty.');
+                return;
+            }
+            writeFcpQueue([]);
+            deselectAssetIds(queue);
+        } catch (error) {
+            console.error('Unable to prepare Final Cut Pro queue export:', error);
+            alert(error.message || 'Could not prepare the Final Cut Pro queue.');
+            return;
+        }
+        updateFcpQueueDisplay();
+        window.location.href = `damnation://send-to-fcp?ids=${queue.join(',')}`;
+    }
+
+    function clearFcpQueue() {
+        try {
+            writeFcpQueue([]);
+            updateFcpQueueDisplay();
+        } catch (error) {
+            console.error('Unable to clear Final Cut Pro queue:', error);
+            alert(error.message || 'Could not clear the Final Cut Pro queue.');
+        }
     }
 
     async function bulkEditAssets() {
