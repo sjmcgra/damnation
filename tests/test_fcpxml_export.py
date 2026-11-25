@@ -289,6 +289,9 @@ def test_cli_open_uses_argument_vector_and_event_override(tmp_path, monkeypatch,
     assert result == 0
     assert build_options["event_name"] == "Selected Event"
     assert output_path.is_file()
+    xml_text = output_path.read_text(encoding="UTF-8")
+    assert xml_text.startswith("<?xml")
+    assert "\n<!DOCTYPE fcpxml>\n<fcpxml" in xml_text
     open_process.assert_called_once_with(
         ["open", "-a", "Final Cut Pro", str(output_path)],
         check=True,
@@ -297,3 +300,30 @@ def test_cli_open_uses_argument_vector_and_event_override(tmp_path, monkeypatch,
     )
     captured = capsys.readouterr()
     assert "Sent 1 clips to Final Cut Pro" in captured.out
+
+
+def test_cli_open_failure_returns_error(tmp_path, monkeypatch, capsys):
+    output_path = tmp_path / "send.fcpxml"
+    monkeypatch.setattr(
+        fcpxml_export,
+        "load_assets",
+        lambda asset_ids: [{"id": 12, "project": "demo", "filepath": "clip.mov"}],
+    )
+    root = ET.Element("fcpxml", {"version": fcpxml_export.FCPXML_VERSION})
+    monkeypatch.setattr(
+        fcpxml_export,
+        "build_fcpxml",
+        lambda assets, event_name=None: (ET.ElementTree(root), 1, []),
+    )
+    monkeypatch.setattr(
+        fcpxml_export.subprocess,
+        "run",
+        Mock(side_effect=fcpxml_export.subprocess.CalledProcessError(
+            1, ["open"], stderr="Final Cut Pro could not open the file"
+        )),
+    )
+
+    result = fcpxml_export.main(["--ids", "12", "--output", str(output_path), "--open"])
+
+    assert result == 1
+    assert "Error opening Final Cut Pro:" in capsys.readouterr().err

@@ -510,7 +510,9 @@ def main(argv=None):
 
     output_path = args.output.expanduser() if args.output else _default_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.write(output_path, encoding="UTF-8", xml_declaration=True)
+    xml_data = ET.tostring(document.getroot(), encoding="UTF-8", xml_declaration=True)
+    declaration, body = xml_data.split(b"?>", maxsplit=1)
+    output_path.write_bytes(declaration + b"?>\n<!DOCTYPE fcpxml>" + body)
 
     if args.open_after:
         try:
@@ -523,7 +525,7 @@ def main(argv=None):
         except (OSError, subprocess.CalledProcessError) as error:
             detail = getattr(error, "stderr", None) or str(error)
             print(f"Error opening Final Cut Pro: {detail.strip()}", file=sys.stderr)
-            return 0
+            return 1
         print(f"Sent {exported_count} clips to Final Cut Pro")
     else:
         print(f"Exported {exported_count} assets to {output_path}")
