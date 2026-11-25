@@ -69,6 +69,20 @@ else
   exit 1
 fi
 
+DAM_PYTHON="$DAM_DIR/.venv/bin/python"
+if [ ! -x "$DAM_PYTHON" ]; then
+  echo "✗ DAMnation venv Python not found or not executable: $DAM_PYTHON"
+  echo "  Recreate the environment with: cd $DAM_DIR && ./install.sh"
+  exit 1
+fi
+
+if ! "$DAM_PYTHON" -c 'from PIL import Image'; then
+  echo "✗ Could not import Pillow using the DAMnation virtual environment."
+  echo "  Install the project dependencies with:"
+  echo "  $DAM_PYTHON -m pip install -r $DAM_DIR/requirements.txt"
+  exit 1
+fi
+
 PROJECTS=()
 COMMIT_MSG=""
 ONLY_SUBDIR=""
@@ -249,14 +263,14 @@ sync_project() {
 
   if [ -n "$ONLY_SUBDIR" ]; then
     echo "  → $ONLY_SUBDIR"
-    python "$DAM_DIR/dam_index.py" index "$PROJECT_NAME" "$ONLY_SUBDIR" || true
+    "$DAM_PYTHON" "$DAM_DIR/dam_index.py" index "$PROJECT_NAME" "$ONLY_SUBDIR" || true
   else
     local d
     for d in "$ASSETS_DIR"/*/; do
       [ -d "$d" ] || continue
       subdir="$(basename "$d")"
       echo "  → $subdir"
-      python "$DAM_DIR/dam_index.py" index "$PROJECT_NAME" "$subdir" || true
+      "$DAM_PYTHON" "$DAM_DIR/dam_index.py" index "$PROJECT_NAME" "$subdir" || true
     done
   fi
 

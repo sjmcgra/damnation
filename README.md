@@ -90,6 +90,12 @@ source .venv/bin/activate
 This installs the Python dependencies into a local `.venv` for the host-side CLI tools (indexer, search, utilities). The container uses its own separate environment.
 On macOS, the installer also offers to install the optional Final Cut Pro URL handler. You can install or remove it later with `tools/macos/install_fcp_handler.sh` or `tools/macos/uninstall_fcp_handler.sh`.
 
+If a host-side command reports a missing Python package (for example, `No module named 'PIL'`), install the dependencies into this environment with:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
 ### 3. Start the web UI
 
 ```bash
